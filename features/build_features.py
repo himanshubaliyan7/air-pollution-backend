@@ -73,8 +73,12 @@ def _fetch_weather_frame(session: Session, grid_cell_id: str, start: datetime, e
             "product_type": [r.product_type for r in rows],
         }
     )
-    # Prefer final ERA5 over ERA5T when both exist for the same hour.
-    df["_rank"] = (df["product_type"] == WeatherProductType.ERA5).astype(int)
+    # Prefer real reanalysis over the near-term forecast fallback when
+    # more than one product exists for the same hour: ERA5 (final) >
+    # ERA5T (preliminary) > FORECAST (Open-Meteo, only ever covers the
+    # last ~5 days ERA5 hasn't published yet - see open_meteo_client.py).
+    _RANK = {WeatherProductType.ERA5: 2, WeatherProductType.ERA5T: 1, WeatherProductType.FORECAST: 0}
+    df["_rank"] = df["product_type"].map(_RANK)
     df = df.sort_values("_rank").drop_duplicates(subset="observed_at", keep="last")
     df = df.set_index(pd.DatetimeIndex(df["observed_at"], tz="UTC")).sort_index()
     return df[["wind_speed", "wind_direction", "relative_humidity"]]

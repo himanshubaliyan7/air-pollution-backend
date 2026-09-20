@@ -16,6 +16,16 @@ class SensorSourceName(str, enum.Enum):
 class WeatherProductType(str, enum.Enum):
     ERA5 = "era5"
     ERA5T = "era5t"
+    # Open-Meteo near-term forecast (ingestion/weather/open_meteo_client.py).
+    # ERA5 has a real ~5 day publication lag even for its ERA5T preliminary
+    # extension (verified live) - there is a genuine window (roughly "now"
+    # back to ~5 days ago) where NO ERA5 data exists yet at any quality
+    # level. FORECAST fills exactly that gap for near-real-time inference;
+    # it is never used for training (build_feature_frame prefers
+    # ERA5 > ERA5T > FORECAST, and training only reads materialized
+    # `features` rows built from whatever was available at computation
+    # time, which for historical windows is always real ERA5/ERA5T).
+    FORECAST = "forecast"
 
 
 class ModelType(str, enum.Enum):

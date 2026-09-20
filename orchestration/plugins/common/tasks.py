@@ -22,6 +22,7 @@ from ingestion.loaders.sensor_loader import load_sensor_readings
 from ingestion.loaders.weather_loader import load_weather_readings
 from ingestion.weather.era5_client import ERA5Client
 from ingestion.weather.grid import DELHI_NCR_AREA
+from ingestion.weather.open_meteo_client import OpenMeteoClient
 from alerting.notifier import send_exceedance_alert
 from alerting.subscriber_store import find_subscribers
 from models import evaluation, exceedance, predict, registry, train
@@ -84,6 +85,20 @@ def reconcile_era5_final(days_ago_center: int = 6, window_hours: int = 24) -> in
         start = center - timedelta(hours=window_hours // 2)
         end = center + timedelta(hours=window_hours // 2)
         readings = client.fetch(start, end, area=DELHI_NCR_AREA)
+        return load_weather_readings(session, readings)
+    finally:
+        session.close()
+
+
+def ingest_open_meteo_forecast(forecast_days: int = 7) -> int:
+    """Fills the real gap ERA5/ERA5T leaves for the last ~5 days and near
+    future (see ingestion/weather/open_meteo_client.py) - re-run hourly
+    alongside the ERA5 tasks so forecast_dag always has *some* weather for
+    the current hour, even though ERA5 itself never will in real time."""
+    session = get_session()
+    try:
+        client = OpenMeteoClient()
+        readings = client.fetch(forecast_days=forecast_days, area=DELHI_NCR_AREA)
         return load_weather_readings(session, readings)
     finally:
         session.close()
