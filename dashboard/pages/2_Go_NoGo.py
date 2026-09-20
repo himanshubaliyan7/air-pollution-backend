@@ -19,7 +19,10 @@ except Exception as exc:  # noqa: BLE001
     st.stop()
 
 if not summary["days"]:
-    st.warning("No forecast available yet for this station. The forecast DAG may not have run yet.")
+    st.warning(
+    "No current forecast for this station - do NOT treat this as a Go. Sensor data for many stations "
+    "is delayed upstream, so a forecast is only produced when the latest reading is recent."
+)
     st.stop()
 
 BANNER = {

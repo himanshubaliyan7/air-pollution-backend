@@ -32,7 +32,7 @@ class ExceedanceSummaryOut(BaseModel):
     station_id: str
     pollutant: str
     days: list[ExceedanceDayOut]
-    overall_recommendation: str  # "go" | "caution" | "no-go"
+    overall_recommendation: str  # "go" | "caution" | "no-go" | "no-data"
 
 
 class HistoryPointOut(BaseModel):
