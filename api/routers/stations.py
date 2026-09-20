@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -16,15 +18,22 @@ def list_stations(db: Session = Depends(get_db)):
     lags for most of the network, so most stations cannot be forecast right now
     and clients need to tell them apart."""
     stations = db.execute(select(Station).where(Station.is_active.is_(True))).scalars().all()
+    # Time-bounded so the hypertable scans only recent chunks: stations dark
+    # for 30+ days are deactivated anyway, and an older forecast is not current.
+    now = datetime.now(timezone.utc)
     latest_reading = dict(
         db.execute(
-            select(RawSensorReading.station_id, func.max(RawSensorReading.observed_at)).group_by(
-                RawSensorReading.station_id
-            )
+            select(RawSensorReading.station_id, func.max(RawSensorReading.observed_at))
+            .where(RawSensorReading.observed_at >= now - timedelta(days=60))
+            .group_by(RawSensorReading.station_id)
         ).all()
     )
     latest_forecast = dict(
-        db.execute(select(Forecast.station_id, func.max(Forecast.forecast_made_at)).group_by(Forecast.station_id)).all()
+        db.execute(
+            select(Forecast.station_id, func.max(Forecast.forecast_made_at))
+            .where(Forecast.forecast_made_at >= now - timedelta(days=1))
+            .group_by(Forecast.station_id)
+        ).all()
     )
     out = [
         StationOut(

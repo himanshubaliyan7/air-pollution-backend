@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 from api.db import get_db
 from api.schemas.forecasts import ForecastPointOut, ForecastSeriesOut, HistoryOut, HistoryPointOut
 from api.schemas.model_health import ModelHealthOut
-from common.constants import MAX_INPUT_STALENESS_HOURS, Pollutant
+from common.constants import Pollutant
+from common.freshness import is_input_fresh
 from db.models import ExceedanceEvaluation, Forecast, RawSensorReading, Station
 
 router = APIRouter(tags=["forecasts"])
@@ -21,11 +22,11 @@ def _latest_forecast_made_at(db: Session, station_id: str, pollutant: Pollutant)
     ).scalar_one_or_none()
 
 
-def is_forecast_current(made_at: datetime | None) -> bool:
-    """A forecast is only actionable while it is as fresh as generate_forecasts
-    would accept its input (MAX_INPUT_STALENESS_HOURS); older, it must be
-    treated as no forecast at all, never as an implicit "go"."""
-    return made_at is not None and datetime.now(timezone.utc) - made_at <= timedelta(hours=MAX_INPUT_STALENESS_HOURS)
+def is_forecast_current(made_at: datetime | None, now: datetime | None = None) -> bool:
+    """A forecast is only actionable while its anchor hour is fresh by the same
+    rule generate_forecasts uses (common.freshness); older, it must be treated
+    as no forecast at all, never as an implicit "go"."""
+    return made_at is not None and is_input_fresh(made_at, now or datetime.now(timezone.utc))
 
 
 @router.get("/forecast/{station_id}", response_model=ForecastSeriesOut)
@@ -41,6 +42,12 @@ def get_forecast(
     made_at = _latest_forecast_made_at(db, station_id, pollutant)
     if made_at is None:
         return ForecastSeriesOut(station_id=station_id, pollutant=pollutant.value, forecast_made_at=None, forecasts=[])
+    if not is_forecast_current(made_at):
+        # Report when the last forecast was made but do not serve its points:
+        # a stale series charted next to a threshold line reads as current.
+        return ForecastSeriesOut(
+            station_id=station_id, pollutant=pollutant.value, forecast_made_at=made_at, is_current=False, forecasts=[]
+        )
 
     stmt = select(Forecast).where(
         Forecast.station_id == station_id, Forecast.pollutant == pollutant, Forecast.forecast_made_at == made_at
@@ -54,6 +61,7 @@ def get_forecast(
         station_id=station_id,
         pollutant=pollutant.value,
         forecast_made_at=made_at,
+        is_current=True,
         forecasts=[
             ForecastPointOut(
                 target_time=r.target_time,

@@ -13,6 +13,9 @@ with DAG(
     schedule="45 * * * *",  # offset after feature_engineering_dag's :30 run
     start_date=datetime(2026, 1, 1),
     catchup=False,
+    # Overlapping runs at the same anchor would each emit the same new-crossing
+    # alerts (the upsert no longer makes the second one fail).
+    max_active_runs=1,
     default_args=default_args,
     tags=["forecast"],
 ) as dag:

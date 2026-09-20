@@ -342,8 +342,9 @@
         "tags": [
           "subscriptions"
         ],
-        "summary": "Create Or Update Subscription",
-        "operationId": "create_or_update_subscription_api_v1_subscriptions_post",
+        "summary": "Create Subscription",
+        "description": "Creates a subscription for a NEW email only.\n\nDeliberately never modifies, reactivates or reveals an existing row: with\nno proof of email ownership, an upsert would let anyone overwrite a\nvictim's stations and read back their subscriber_id (the only credential\nfor DELETE). A 409 is returned instead. Changing or re-enabling a\nsubscription needs an owner-verified flow (emailed confirmation token),\nwhich is not built yet.",
+        "operationId": "create_subscription_api_v1_subscriptions_post",
         "requestBody": {
           "content": {
             "application/json": {
@@ -570,6 +571,11 @@
               }
             ],
             "title": "Forecast Made At"
+          },
+          "is_current": {
+            "type": "boolean",
+            "title": "Is Current",
+            "default": false
           },
           "forecasts": {
             "items": {
@@ -881,16 +887,22 @@
           },
           "station_ids": {
             "items": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 64,
+              "minLength": 1
             },
             "type": "array",
+            "maxItems": 10,
+            "minItems": 1,
             "title": "Station Ids"
           },
           "pollutants": {
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/Pollutant"
             },
             "type": "array",
+            "maxItems": 2,
+            "minItems": 1,
             "title": "Pollutants"
           }
         },

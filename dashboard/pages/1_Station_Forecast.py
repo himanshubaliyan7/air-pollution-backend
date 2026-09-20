@@ -23,7 +23,11 @@ except Exception as exc:  # noqa: BLE001
     st.stop()
 
 if not series["forecasts"]:
-    st.warning("No forecast available yet for this station.")
+    made_at = series.get("forecast_made_at")
+    st.warning(
+        "No current forecast for this station"
+        + (f" (the last one was made {made_at} and is too old to use)." if made_at else ".")
+    )
     st.stop()
 
 df = pd.DataFrame(series["forecasts"])

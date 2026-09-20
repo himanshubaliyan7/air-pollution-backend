@@ -13,6 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from common.config import get_settings
+from common.freshness import floor_hour, is_input_fresh
 from common.constants import (
     DEFAULT_HORIZONS_HOURS,
     MAX_INPUT_STALENESS_HOURS,
@@ -220,9 +221,9 @@ def compute_and_write_features(lookback_hours: int = 6) -> int:
 
 # -------------------------------------------------------------------- forecast
 
-def forecast_anchor(newest_reading: datetime | None, now_hour: datetime) -> datetime | None:
+def forecast_anchor(newest_reading: datetime | None, now: datetime) -> datetime | None:
     """The as_of hour to forecast from for one station/pollutant, or None if
-    its newest reading is missing or older than MAX_INPUT_STALENESS_HOURS.
+    its newest reading is missing or too old (see common.freshness).
 
     Anchors on the newest hour that actually has a reading, not on "now": the
     upstream feed lags, and build_feature_frame only yields lag/rolling values
@@ -231,10 +232,8 @@ def forecast_anchor(newest_reading: datetime | None, now_hour: datetime) -> date
     hours of anchor lag is immaterial."""
     if newest_reading is None:
         return None
-    as_of = min(now_hour, newest_reading.replace(minute=0, second=0, microsecond=0))
-    if now_hour - as_of > timedelta(hours=MAX_INPUT_STALENESS_HOURS):
-        return None
-    return as_of
+    as_of = min(floor_hour(now), floor_hour(newest_reading))
+    return as_of if is_input_fresh(as_of, now) else None
 
 
 def generate_forecasts() -> dict:
@@ -242,7 +241,7 @@ def generate_forecasts() -> dict:
     try:
         stations = _active_stations(session)
         thresholds = exceedance.load_thresholds()
-        now_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        now = datetime.now(timezone.utc)
 
         latest_reading = {
             (sid, pol): ts
@@ -260,7 +259,7 @@ def generate_forecasts() -> dict:
         new_crossings: list[dict] = []
         for station in stations:
             for pollutant in Pollutant:
-                as_of = forecast_anchor(latest_reading.get((station.station_id, pollutant)), now_hour)
+                as_of = forecast_anchor(latest_reading.get((station.station_id, pollutant)), now)
                 if as_of is None:
                     skipped_stale += 1
                     continue

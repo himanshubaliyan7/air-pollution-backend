@@ -25,6 +25,8 @@ with DAG(
     schedule="10 * * * *",
     start_date=datetime(2026, 1, 1),
     catchup=False,
+    # Overlapping runs share one OpenAQ rate limit (~500 requests/run) and exhaust it.
+    max_active_runs=1,
     default_args=default_args,
     tags=["ingestion"],
 ) as dag:
@@ -43,9 +45,14 @@ with DAG(
         weather_rows += ti.xcom_pull(task_ids="fetch_open_meteo_forecast") or 0
         ingestion_data_quality_check(sensor_rows, weather_rows)
 
-    quality_check = PythonOperator(task_id="ingestion_data_quality_check", python_callable=_quality_check)
+    # all_done: the freshness/zero-rows check must still run when an upstream
+    # task failed - that is exactly when it matters (XComs are then None -> 0).
+    quality_check = PythonOperator(
+        task_id="ingestion_data_quality_check", python_callable=_quality_check, trigger_rule="all_done"
+    )
 
-    # Open-Meteo is independent of the ERA5 archive chain - an ERA5/CDS failure
-    # must not stop the near-term weather forecast (the inference-time input).
+    # Open-Meteo is a root task, independent of both OpenAQ and the ERA5 archive
+    # chain: neither an OpenAQ rate limit nor a CDS failure may stop the
+    # near-term weather forecast that inference depends on.
     fetch_openaq >> fetch_era5_latest >> reconcile_era5 >> quality_check
-    fetch_openaq >> fetch_open_meteo >> quality_check
+    fetch_open_meteo >> quality_check

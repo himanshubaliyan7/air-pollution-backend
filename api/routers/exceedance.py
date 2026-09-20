@@ -18,7 +18,7 @@ from api.db import get_db
 from api.routers.forecasts import _latest_forecast_made_at, is_forecast_current
 from api.schemas.forecasts import ExceedanceDayOut, ExceedanceSummaryOut
 from common.config import to_ist
-from common.constants import Pollutant
+from common.constants import DEFAULT_HORIZONS_HOURS, Pollutant
 from db.models import Forecast, Station
 from models.exceedance import get_aqi_category, load_thresholds
 
@@ -77,8 +77,16 @@ def get_exceedance_summary(
         for d, r in sorted(by_day.items())
     ]
 
+    # predict.forecast can skip individual horizons (missing model, gap in lag
+    # history), so the newest run may cover only some days. Known bad days still
+    # mean no-go, but an incomplete run with nothing flagged must not read as go.
+    expected = {h for h in DEFAULT_HORIZONS_HOURS if h <= days_ahead * 24}
+    incomplete = not expected <= {r.horizon_hours for r in rows}
+
     if any(d.exceedance_flag for d in days):
         recommendation = "no-go"
+    elif incomplete:
+        recommendation = "no-data"
     elif any(d.exceedance_probability >= _CAUTION_PROBABILITY_FLOOR for d in days):
         recommendation = "caution"
     else:

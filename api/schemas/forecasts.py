@@ -17,6 +17,8 @@ class ForecastSeriesOut(BaseModel):
     station_id: str
     pollutant: str
     forecast_made_at: datetime | None
+    # False when a forecast exists but is too old to act on; `forecasts` is then empty.
+    is_current: bool = False
     forecasts: list[ForecastPointOut]
 
 
@@ -32,7 +34,7 @@ class ExceedanceSummaryOut(BaseModel):
     station_id: str
     pollutant: str
     days: list[ExceedanceDayOut]
-    overall_recommendation: str  # "go" | "caution" | "no-go" | "no-data"
+    overall_recommendation: str  # "go" | "caution" | "no-go" | "no-data" ("no-data" may still carry partial `days`)
 
 
 class HistoryPointOut(BaseModel):
