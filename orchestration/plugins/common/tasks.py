@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from common.config import get_settings
 from common.constants import (
@@ -216,19 +217,29 @@ def generate_forecasts() -> dict:
                         .limit(1)
                     ).scalar_one_or_none()
 
-                    session.add(
-                        Forecast(
-                            station_id=station.station_id,
-                            pollutant=pollutant,
-                            model_id=result.model_id,
-                            forecast_made_at=as_of,
-                            target_time=target_time,
-                            horizon_hours=horizon,
-                            point_forecast=result.point_forecast,
-                            quantile_low=result.quantile_low,
-                            quantile_high=result.quantile_high,
-                            exceedance_probability=result.exceedance_probability,
-                            exceedance_flag=result.exceedance_flag,
+                    # Upsert: the anchor is the newest observed hour, which does
+                    # not advance between hourly runs while the upstream feed
+                    # is lagging, so a re-run legitimately hits the same key.
+                    values = {
+                        "station_id": station.station_id,
+                        "pollutant": pollutant,
+                        "model_id": result.model_id,
+                        "forecast_made_at": as_of,
+                        "target_time": target_time,
+                        "horizon_hours": horizon,
+                        "point_forecast": result.point_forecast,
+                        "quantile_low": result.quantile_low,
+                        "quantile_high": result.quantile_high,
+                        "exceedance_probability": result.exceedance_probability,
+                        "exceedance_flag": result.exceedance_flag,
+                    }
+                    session.execute(
+                        pg_insert(Forecast)
+                        .values(**values)
+                        .on_conflict_do_update(
+                            index_elements=["station_id", "pollutant", "model_id", "forecast_made_at", "target_time"],
+                            set_={k: v for k, v in values.items()
+                                  if k not in ("station_id", "pollutant", "model_id", "forecast_made_at", "target_time")},
                         )
                     )
                     written += 1
