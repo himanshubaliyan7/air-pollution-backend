@@ -36,7 +36,7 @@ services:
       - pgdata:/var/lib/postgresql/data
       - ../orchestration/include/sql:/docker-entrypoint-initdb.d:ro
     ports:
-      - "5433:5432" # 5432 avoided - commonly collides with a host-installed Postgres
+      - "127.0.0.1:5433:5432" # loopback only; 5432 avoided - commonly collides with a host-installed Postgres
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
       interval: 5s
@@ -123,8 +123,8 @@ services:
   mailhog:
     image: mailhog/mailhog:v1.0.1
     ports:
-      - "8025:8025" # web UI
-      - "1025:1025" # smtp
+      - "127.0.0.1:8025:8025" # web UI (dev only, unauthenticated, shows subscriber emails)
+      - "127.0.0.1:1025:1025" # smtp
 
 volumes:
   pgdata:

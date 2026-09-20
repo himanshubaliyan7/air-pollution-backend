@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     # extra today; restrict it to the real frontend origin(s) once known.
     cors_allowed_origins: str = "*"
 
+    # Public URL of the dashboard/frontend, linked from alert emails. Must be
+    # set for real deployments: recipients cannot open the localhost default.
+    dashboard_url: str = "http://localhost:8501"
+
     openaq_api_key: str = ""
 
     cds_api_url: str = "https://cds.climate.copernicus.eu/api"

@@ -453,6 +453,7 @@ def trigger_alerts_for_crossings(new_crossings: list[dict]) -> int:
                         model_id=uuid.UUID(crossing["model_id"]),
                         forecast_made_at=datetime.fromisoformat(crossing["forecast_made_at"]),
                         target_time=datetime.fromisoformat(crossing["target_time"]),
+                        dashboard_url=get_settings().dashboard_url,
                     )
                 )
         return sent

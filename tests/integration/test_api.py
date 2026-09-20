@@ -109,14 +109,17 @@ def test_stations_and_forecast_endpoints(db_session):
     assert resp.status_code == 404
 
 
+def _subscribe(client, **overrides):
+    body = {"email": "school@example.com", "station_ids": ["openaq:api-test"], "pollutants": ["pm25"], **overrides}
+    return client.post("/api/v1/subscriptions", json=body)
+
+
 def test_subscription_create_and_delete(db_session):
     from api.main import app
 
+    _seed_station_and_forecast(db_session)
     client = TestClient(app)
-    resp = client.post(
-        "/api/v1/subscriptions",
-        json={"email": "school@example.com", "station_ids": ["openaq:api-test"], "pollutants": ["pm25"]},
-    )
+    resp = _subscribe(client)
     assert resp.status_code == 200
     subscriber_id = resp.json()["subscriber_id"]
     assert resp.json()["status"] == "subscribed"
@@ -124,3 +127,61 @@ def test_subscription_create_and_delete(db_session):
     resp = client.delete(f"/api/v1/subscriptions/{subscriber_id}")
     assert resp.status_code == 200
     assert resp.json()["status"] == "unsubscribed"
+
+
+def test_existing_email_cannot_be_overwritten_or_have_its_id_read_back(db_session):
+    """Regression: an upsert let anyone POST a victim's email to overwrite their
+    stations and get back the victim's subscriber_id (the only credential for
+    DELETE), i.e. hijack or cancel any subscription."""
+    from api.main import app
+    from db.models import AlertSubscription
+
+    _seed_station_and_forecast(db_session)
+    client = TestClient(app)
+    victim_id = _subscribe(client, email="victim@school.in").json()["subscriber_id"]
+
+    resp = _subscribe(client, email="Victim@School.in", station_ids=["openaq:api-test"], pollutants=["no2"])
+    assert resp.status_code == 409
+    assert victim_id not in resp.text
+
+    db_session.expire_all()
+    row = db_session.query(AlertSubscription).one()
+    assert str(row.subscriber_id) == victim_id
+    assert row.pollutants == ["pm25"] and row.is_active is True
+
+    # Unsubscribed rows are not silently re-enabled by a stranger either.
+    client.delete(f"/api/v1/subscriptions/{victim_id}")
+    assert _subscribe(client, email="victim@school.in").status_code == 409
+    db_session.expire_all()
+    assert db_session.query(AlertSubscription).one().is_active is False
+
+
+def test_subscription_rejects_unknown_station_and_bad_input(db_session):
+    from api.main import app
+
+    _seed_station_and_forecast(db_session)
+    client = TestClient(app)
+    assert _subscribe(client, station_ids=["openaq:typo"]).status_code == 422
+    assert _subscribe(client, station_ids=[]).status_code == 422
+    assert _subscribe(client, station_ids=[f"s{i}" for i in range(11)]).status_code == 422
+    assert _subscribe(client, station_ids=["x" * 65]).status_code == 422
+    assert _subscribe(client, pollutants=["PM25"]).status_code == 422  # must match the enum exactly
+    assert _subscribe(client, pollutants=[]).status_code == 422
+    assert _subscribe(client, email="not-an-email").status_code == 422
+    assert _subscribe(client, email="a" * 250 + "@example.com").status_code == 422
+
+
+def test_subscription_normalises_email_and_dedupes(db_session):
+    from api.main import app
+    from db.models import AlertSubscription
+
+    _seed_station_and_forecast(db_session)
+    resp = _subscribe(
+        TestClient(app), email="  Mixed.Case@Example.COM ",
+        station_ids=["openaq:api-test", "openaq:api-test"], pollutants=["pm25", "pm25"],
+    )
+    assert resp.status_code == 200
+    db_session.expire_all()
+    row = db_session.query(AlertSubscription).one()
+    assert row.email == "mixed.case@example.com"
+    assert row.station_ids == ["openaq:api-test"] and row.pollutants == ["pm25"]

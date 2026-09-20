@@ -52,7 +52,7 @@ Complete each phase fully, then stop and summarise so I can review before you co
 
 **Phase 3: Forecast detail.** Chart of `/forecast/{station_id}` (expected value with the low/high range across the horizons) and of `/forecast/{station_id}/history` (actual vs. forecast over a selectable lookback), with accessible tooltips and a table alternative to the chart.
 
-**Phase 4: Alert subscription.** A form that calls `POST /subscriptions` (email, one or more stations, one or more pollutants) and shows the result; and an unsubscribe flow using `DELETE /subscriptions/{subscriber_id}`. Note the API returns `subscriber_id` on subscribe: keep it (e.g. in the confirmation and for the unsubscribe action) since there is no login. Do not collect anything beyond what the schema accepts. Make clear to users that alerts are for stations with forecasts.
+**Phase 4: Alert subscription. ON HOLD: do not build this phase until I explicitly tell you to.** The subscription flow is being redesigned on the backend (owner-verified email confirmation), so the contract below is provisional. When I release it you will receive an updated `openapi.json`. For reference, today: `POST /subscriptions` takes an email, 1-10 station ids that must exist, and pollutants (`pm25`, `no2`, lower-case); it returns `409` if the email already has a subscription (it never modifies an existing one) and `422` with a message for unknown stations or invalid input. `DELETE /subscriptions/{subscriber_id}` unsubscribes. Do not build any "change my subscription" feature.
 
 **Phase 5: Operator model-health page.** A separate, clearly operator-only page listing `/model-health` results (filterable by station/pollutant), with nullable metrics shown as "n/a". Do not link it from school-facing navigation.
 
