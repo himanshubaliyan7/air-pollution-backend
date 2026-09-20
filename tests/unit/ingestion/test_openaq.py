@@ -197,6 +197,43 @@ def test_sensor_ids_are_cached_across_fetch_readings_calls():
     assert calls["locations"] == 1  # second call reused the cached sensor id
 
 
+def test_fetch_readings_floors_timestamps_to_the_hour():
+    """Real Delhi NCR CPCB data via OpenAQ is consistently stamped at :30
+    past the hour (confirmed against a live 180-day backfill: 438k/438k
+    readings), unlike ERA5 which is cleanly on the hour. Every downstream
+    hourly bucket (lag/rolling features, daily exceedance aggregation,
+    weather join) assumes a clean :00 grid - an unfloored :30 offset
+    silently broke every hour-alignment downstream in practice."""
+    responses = {
+        "/locations/111": FakeResponse(
+            {"id": 111, "sensors": [{"id": 9001, "parameter": {"name": "pm25", "units": "ug/m3"}}]}
+        ),
+        "/sensors/9001/hours": FakeResponse(
+            {
+                "meta": {"found": 1},
+                "results": [
+                    {
+                        "value": 100.0,
+                        "parameter": {"name": "pm25", "units": "ug/m3"},
+                        "period": {"datetimeFrom": {"utc": "2026-09-19T11:30:00Z"}},
+                    }
+                ],
+            }
+        ),
+    }
+    source = OpenAQSource(api_key="test-key", session=FakeSession(responses))
+
+    readings = source.fetch_readings(
+        source_location_ids=["111"],
+        pollutants=[Pollutant.PM25],
+        start=datetime(2026, 9, 19, tzinfo=timezone.utc),
+        end=datetime(2026, 9, 20, tzinfo=timezone.utc),
+    )
+
+    assert len(readings) == 1
+    assert readings[0].observed_at == datetime(2026, 9, 19, 11, 0, tzinfo=timezone.utc)
+
+
 def test_pagination_stops_on_short_page():
     responses = {
         "/locations": FakeResponse(

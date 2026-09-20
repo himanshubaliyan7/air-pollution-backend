@@ -174,6 +174,19 @@ class OpenAQSource(SensorSource):
                         if not datetime_from:
                             continue
                         observed_at = datetime.fromisoformat(datetime_from.replace("Z", "+00:00"))
+                        # Confirmed against real Delhi NCR CPCB data: OpenAQ's
+                        # period.datetimeFrom for this feed is consistently
+                        # stamped at :30 past the hour (438k/438k readings in
+                        # a live backfill), not :00 - unlike ERA5, which is
+                        # cleanly on the hour. Every downstream hourly
+                        # bucket (lag/rolling features, the daily exceedance
+                        # aggregation, join with weather) assumes a clean
+                        # :00 grid, so floor here at the ingestion boundary
+                        # rather than letting the offset propagate and
+                        # silently break every hour-alignment downstream (as
+                        # it did in practice: this caused a real backfill's
+                        # entire training run to see zero usable rows).
+                        observed_at = observed_at.replace(minute=0, second=0, microsecond=0)
                         unit = (row.get("parameter") or {}).get("units", "ug/m3")
                         readings.append(
                             SensorReading(
