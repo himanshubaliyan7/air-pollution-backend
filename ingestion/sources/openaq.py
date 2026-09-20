@@ -56,6 +56,11 @@ class OpenAQSource(SensorSource):
         return SensorSourceName.OPENAQ
 
     def _get(self, path: str, params: dict) -> dict:
+        """Retries on 429 (rate limit) and on 5xx (transient upstream
+        errors) - a real backfill run hit a genuine 500 from OpenAQ on one
+        sensor's /hours endpoint and, before this fix, that crashed the
+        entire multi-station fetch instead of retrying/skipping just that
+        one sensor (see fetch_readings's per-sensor try/except)."""
         url = f"{BASE_URL}{path}"
         backoff = INITIAL_BACKOFF_SECONDS
         for attempt in range(1, MAX_RETRIES + 1):
@@ -69,9 +74,17 @@ class OpenAQSource(SensorSource):
                 time.sleep(retry_after)
                 backoff *= 2
                 continue
+            if resp.status_code >= 500:
+                logger.warning(
+                    "OpenAQ server error %d on %s (attempt %d/%d), backing off %.1fs",
+                    resp.status_code, path, attempt, MAX_RETRIES, backoff,
+                )
+                time.sleep(backoff)
+                backoff *= 2
+                continue
             resp.raise_for_status()
             return resp.json()
-        raise RuntimeError(f"OpenAQ request to {path} failed after {MAX_RETRIES} retries (rate limited)")
+        raise RuntimeError(f"OpenAQ request to {path} failed after {MAX_RETRIES} retries (rate limited or server error)")
 
     def _paginate(self, path: str, params: dict):
         page = 1
@@ -151,24 +164,37 @@ class OpenAQSource(SensorSource):
                     "datetime_from": start.astimezone(timezone.utc).isoformat(),
                     "datetime_to": end.astimezone(timezone.utc).isoformat(),
                 }
-                for row in self._paginate(f"/sensors/{sensor_id}/hours", params):
-                    value = row.get("value")
-                    if value is None:
-                        continue
-                    period = row.get("period") or {}
-                    datetime_from = (period.get("datetimeFrom") or {}).get("utc")
-                    if not datetime_from:
-                        continue
-                    observed_at = datetime.fromisoformat(datetime_from.replace("Z", "+00:00"))
-                    unit = (row.get("parameter") or {}).get("units", "ug/m3")
-                    readings.append(
-                        SensorReading(
-                            source_location_id=location_id,
-                            pollutant=pollutant,
-                            value=float(value),
-                            unit=unit,
-                            observed_at=observed_at,
-                            source_record_id=f"{sensor_id}:{datetime_from}",
+                try:
+                    for row in self._paginate(f"/sensors/{sensor_id}/hours", params):
+                        value = row.get("value")
+                        if value is None:
+                            continue
+                        period = row.get("period") or {}
+                        datetime_from = (period.get("datetimeFrom") or {}).get("utc")
+                        if not datetime_from:
+                            continue
+                        observed_at = datetime.fromisoformat(datetime_from.replace("Z", "+00:00"))
+                        unit = (row.get("parameter") or {}).get("units", "ug/m3")
+                        readings.append(
+                            SensorReading(
+                                source_location_id=location_id,
+                                pollutant=pollutant,
+                                value=float(value),
+                                unit=unit,
+                                observed_at=observed_at,
+                                source_record_id=f"{sensor_id}:{datetime_from}",
+                            )
                         )
+                except (requests.HTTPError, RuntimeError) as exc:
+                    # A persistently-failing sensor (repeated 5xx, etc.) must
+                    # not take down the whole multi-station fetch - this
+                    # crashed a real backfill run before this fix. Whatever
+                    # hours this sensor contributed are simply missing for
+                    # this window; a later re-run (idempotent upsert) picks
+                    # them up if the upstream issue clears.
+                    logger.warning(
+                        "Could not fetch hours for sensor %s (location %s, %s): %s",
+                        sensor_id, location_id, pollutant.value, exc,
                     )
+                    continue
         return readings

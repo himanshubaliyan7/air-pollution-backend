@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 from common.constants import Pollutant
 from ingestion.sources.openaq import OpenAQSource
@@ -105,6 +106,58 @@ def test_fetch_readings_resolves_sensors_and_parses_hours():
     assert r.value == 145.2
     assert r.observed_at == datetime(2026, 9, 19, 0, 0, tzinfo=timezone.utc)
     assert r.source_location_id == "111"
+
+
+def test_fetch_readings_skips_a_sensor_that_persistently_5xxs_without_crashing():
+    """A real backfill run hit a genuine 500 from OpenAQ on one sensor's
+    /hours endpoint, which crashed the entire multi-station fetch before
+    this fix - it must instead skip just that sensor and keep going."""
+    responses = {
+        "/locations/111": FakeResponse(
+            {
+                "id": 111,
+                "sensors": [
+                    {"id": 9001, "parameter": {"name": "pm25", "units": "ug/m3"}},
+                ],
+            }
+        ),
+        "/sensors/9001/hours": FakeResponse({}, status_code=500),
+        "/locations/222": FakeResponse(
+            {
+                "id": 222,
+                "sensors": [
+                    {"id": 9002, "parameter": {"name": "pm25", "units": "ug/m3"}},
+                ],
+            }
+        ),
+        "/sensors/9002/hours": FakeResponse(
+            {
+                "meta": {"found": 1},
+                "results": [
+                    {
+                        "value": 88.0,
+                        "parameter": {"name": "pm25", "units": "ug/m3"},
+                        "period": {"datetimeFrom": {"utc": "2026-09-19T00:00:00Z"}},
+                    }
+                ],
+            }
+        ),
+    }
+    source = OpenAQSource(api_key="test-key", session=FakeSession(responses))
+
+    with patch("ingestion.sources.openaq.time.sleep"):  # don't actually wait through the real backoff
+        readings = source.fetch_readings(
+            source_location_ids=["111", "222"],
+            pollutants=[Pollutant.PM25],
+            start=datetime(2026, 9, 19, tzinfo=timezone.utc),
+            end=datetime(2026, 9, 20, tzinfo=timezone.utc),
+        )
+
+    # Station 111's sensor 5xx'd persistently and was skipped; station 222's
+    # reading still comes through.
+    assert len(readings) == 1
+    assert readings[0].source_location_id == "222"
+    assert readings[0].value == 88.0
 
 
 def test_sensor_ids_are_cached_across_fetch_readings_calls():
