@@ -1,0 +1,966 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Air Pollution Prediction API",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/v1/stations": {
+      "get": {
+        "tags": [
+          "stations"
+        ],
+        "summary": "List Stations",
+        "description": "Stations with a current forecast come first: the upstream sensor feed\nlags for most of the network, so most stations cannot be forecast right now\nand clients need to tell them apart.",
+        "operationId": "list_stations_api_v1_stations_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/StationOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Stations Api V1 Stations Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stations/{station_id}": {
+      "get": {
+        "tags": [
+          "stations"
+        ],
+        "summary": "Get Station",
+        "operationId": "get_station_api_v1_stations__station_id__get",
+        "parameters": [
+          {
+            "name": "station_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Station Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StationDetailOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/forecast/{station_id}": {
+      "get": {
+        "tags": [
+          "forecasts"
+        ],
+        "summary": "Get Forecast",
+        "operationId": "get_forecast_api_v1_forecast__station_id__get",
+        "parameters": [
+          {
+            "name": "station_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Station Id"
+            }
+          },
+          {
+            "name": "pollutant",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Pollutant",
+              "default": "pm25"
+            }
+          },
+          {
+            "name": "horizon_days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 30,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Horizon Days"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForecastSeriesOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/forecast/{station_id}/history": {
+      "get": {
+        "tags": [
+          "forecasts"
+        ],
+        "summary": "Get Forecast History",
+        "operationId": "get_forecast_history_api_v1_forecast__station_id__history_get",
+        "parameters": [
+          {
+            "name": "station_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Station Id"
+            }
+          },
+          {
+            "name": "pollutant",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Pollutant",
+              "default": "pm25"
+            }
+          },
+          {
+            "name": "lookback_days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 90,
+              "minimum": 1,
+              "default": 14,
+              "title": "Lookback Days"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/model-health": {
+      "get": {
+        "tags": [
+          "forecasts"
+        ],
+        "summary": "Get Model Health",
+        "operationId": "get_model_health_api_v1_model_health_get",
+        "parameters": [
+          {
+            "name": "station_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Station Id"
+            }
+          },
+          {
+            "name": "pollutant",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Pollutant"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pollutant"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ModelHealthOut"
+                  },
+                  "title": "Response Get Model Health Api V1 Model Health Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/forecast/{station_id}/exceedance": {
+      "get": {
+        "tags": [
+          "exceedance"
+        ],
+        "summary": "Get Exceedance Summary",
+        "operationId": "get_exceedance_summary_api_v1_forecast__station_id__exceedance_get",
+        "parameters": [
+          {
+            "name": "station_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Station Id"
+            }
+          },
+          {
+            "name": "pollutant",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Pollutant",
+              "default": "pm25"
+            }
+          },
+          {
+            "name": "days_ahead",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 14,
+              "minimum": 1,
+              "default": 5,
+              "title": "Days Ahead"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExceedanceSummaryOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/subscriptions": {
+      "post": {
+        "tags": [
+          "subscriptions"
+        ],
+        "summary": "Create Or Update Subscription",
+        "operationId": "create_or_update_subscription_api_v1_subscriptions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubscriptionIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/subscriptions/{subscriber_id}": {
+      "delete": {
+        "tags": [
+          "subscriptions"
+        ],
+        "summary": "Unsubscribe",
+        "operationId": "unsubscribe_api_v1_subscriptions__subscriber_id__delete",
+        "parameters": [
+          {
+            "name": "subscriber_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Subscriber Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_api_v1_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ExceedanceDayOut": {
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date",
+            "title": "Date"
+          },
+          "exceedance_flag": {
+            "type": "boolean",
+            "title": "Exceedance Flag"
+          },
+          "exceedance_probability": {
+            "type": "number",
+            "title": "Exceedance Probability"
+          },
+          "worst_case_value": {
+            "type": "number",
+            "title": "Worst Case Value"
+          },
+          "aqi_category": {
+            "type": "string",
+            "title": "Aqi Category"
+          }
+        },
+        "type": "object",
+        "required": [
+          "date",
+          "exceedance_flag",
+          "exceedance_probability",
+          "worst_case_value",
+          "aqi_category"
+        ],
+        "title": "ExceedanceDayOut"
+      },
+      "ExceedanceSummaryOut": {
+        "properties": {
+          "station_id": {
+            "type": "string",
+            "title": "Station Id"
+          },
+          "pollutant": {
+            "type": "string",
+            "title": "Pollutant"
+          },
+          "days": {
+            "items": {
+              "$ref": "#/components/schemas/ExceedanceDayOut"
+            },
+            "type": "array",
+            "title": "Days"
+          },
+          "overall_recommendation": {
+            "type": "string",
+            "title": "Overall Recommendation"
+          }
+        },
+        "type": "object",
+        "required": [
+          "station_id",
+          "pollutant",
+          "days",
+          "overall_recommendation"
+        ],
+        "title": "ExceedanceSummaryOut"
+      },
+      "ForecastPointOut": {
+        "properties": {
+          "target_time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Target Time"
+          },
+          "horizon_hours": {
+            "type": "integer",
+            "title": "Horizon Hours"
+          },
+          "point_forecast": {
+            "type": "number",
+            "title": "Point Forecast"
+          },
+          "quantile_low": {
+            "type": "number",
+            "title": "Quantile Low"
+          },
+          "quantile_high": {
+            "type": "number",
+            "title": "Quantile High"
+          },
+          "exceedance_probability": {
+            "type": "number",
+            "title": "Exceedance Probability"
+          },
+          "exceedance_flag": {
+            "type": "boolean",
+            "title": "Exceedance Flag"
+          }
+        },
+        "type": "object",
+        "required": [
+          "target_time",
+          "horizon_hours",
+          "point_forecast",
+          "quantile_low",
+          "quantile_high",
+          "exceedance_probability",
+          "exceedance_flag"
+        ],
+        "title": "ForecastPointOut"
+      },
+      "ForecastSeriesOut": {
+        "properties": {
+          "station_id": {
+            "type": "string",
+            "title": "Station Id"
+          },
+          "pollutant": {
+            "type": "string",
+            "title": "Pollutant"
+          },
+          "forecast_made_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Forecast Made At"
+          },
+          "forecasts": {
+            "items": {
+              "$ref": "#/components/schemas/ForecastPointOut"
+            },
+            "type": "array",
+            "title": "Forecasts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "station_id",
+          "pollutant",
+          "forecast_made_at",
+          "forecasts"
+        ],
+        "title": "ForecastSeriesOut"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HistoryOut": {
+        "properties": {
+          "station_id": {
+            "type": "string",
+            "title": "Station Id"
+          },
+          "pollutant": {
+            "type": "string",
+            "title": "Pollutant"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/HistoryPointOut"
+            },
+            "type": "array",
+            "title": "Points"
+          }
+        },
+        "type": "object",
+        "required": [
+          "station_id",
+          "pollutant",
+          "points"
+        ],
+        "title": "HistoryOut"
+      },
+      "HistoryPointOut": {
+        "properties": {
+          "time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Time"
+          },
+          "actual": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual"
+          },
+          "forecast_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Forecast Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "time",
+          "actual",
+          "forecast_value"
+        ],
+        "title": "HistoryPointOut"
+      },
+      "ModelHealthOut": {
+        "properties": {
+          "station_id": {
+            "type": "string",
+            "title": "Station Id"
+          },
+          "pollutant": {
+            "type": "string",
+            "title": "Pollutant"
+          },
+          "horizon_hours": {
+            "type": "integer",
+            "title": "Horizon Hours"
+          },
+          "precision": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Precision"
+          },
+          "recall": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recall"
+          },
+          "f1": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "F1"
+          },
+          "mae": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mae"
+          },
+          "rmse": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rmse"
+          },
+          "evaluation_window_end": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Evaluation Window End"
+          }
+        },
+        "type": "object",
+        "required": [
+          "station_id",
+          "pollutant",
+          "horizon_hours",
+          "precision",
+          "recall",
+          "f1",
+          "mae",
+          "rmse",
+          "evaluation_window_end"
+        ],
+        "title": "ModelHealthOut"
+      },
+      "Pollutant": {
+        "type": "string",
+        "enum": [
+          "pm25",
+          "no2"
+        ],
+        "title": "Pollutant"
+      },
+      "StationDetailOut": {
+        "properties": {
+          "station_id": {
+            "type": "string",
+            "title": "Station Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "lat": {
+            "type": "number",
+            "title": "Lat"
+          },
+          "lon": {
+            "type": "number",
+            "title": "Lon"
+          },
+          "city": {
+            "type": "string",
+            "title": "City"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "latest_observed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Observed At"
+          },
+          "has_current_forecast": {
+            "type": "boolean",
+            "title": "Has Current Forecast",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "station_id",
+          "name",
+          "lat",
+          "lon",
+          "city",
+          "is_active"
+        ],
+        "title": "StationDetailOut"
+      },
+      "StationOut": {
+        "properties": {
+          "station_id": {
+            "type": "string",
+            "title": "Station Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "lat": {
+            "type": "number",
+            "title": "Lat"
+          },
+          "lon": {
+            "type": "number",
+            "title": "Lon"
+          },
+          "city": {
+            "type": "string",
+            "title": "City"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "latest_observed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Observed At"
+          },
+          "has_current_forecast": {
+            "type": "boolean",
+            "title": "Has Current Forecast",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "station_id",
+          "name",
+          "lat",
+          "lon",
+          "city",
+          "is_active"
+        ],
+        "title": "StationOut"
+      },
+      "SubscriptionIn": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Email"
+          },
+          "station_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Station Ids"
+          },
+          "pollutants": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Pollutants"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email",
+          "station_ids",
+          "pollutants"
+        ],
+        "title": "SubscriptionIn"
+      },
+      "SubscriptionOut": {
+        "properties": {
+          "subscriber_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Subscriber Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "subscriber_id",
+          "status"
+        ],
+        "title": "SubscriptionOut"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

@@ -25,6 +25,11 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg2://postgres:postgres@localhost:5432/airpollution"
 
+    # Origins a browser frontend may call the API from, comma-separated, or "*".
+    # The API is unauthenticated and sets no cookies, so "*" exposes nothing
+    # extra today; restrict it to the real frontend origin(s) once known.
+    cors_allowed_origins: str = "*"
+
     openaq_api_key: str = ""
 
     cds_api_url: str = "https://cds.climate.copernicus.eu/api"
