@@ -7,26 +7,23 @@ reanalysis-era5-single-levels dataset page):
     container entrypoint from CDS_API_URL/CDS_API_KEY env vars - see
     orchestration/Dockerfile), then client.retrieve(dataset, request, target)
 
-IMPORTANT: the exact request dict keys for the CDS-Beta API (e.g. whether
-date filtering uses year/month/day/time lists vs a "date" range string, and
-"format" vs "data_format" for the output format key) should be verified
-against the live "Show API request" panel on the dataset's CDS page before
-first real use against a real API key - this could not be end-to-end tested
-in this environment since no CDS credentials are configured. The request
-shape below follows the long-standing documented pattern; if CDS rejects it,
-compare the rejected request against the dataset page's generated example
-and adjust the keys in _build_request() only - nothing downstream changes.
+Verified end-to-end against a real CDS account on 2026-09-20: the
+request shape in _build_request() (year/month/day/time lists, "format":
+"netcdf") is accepted as-is by the live API - no request-shape changes were
+needed. The response NetCDF's actual structure (confirmed by inspection,
+and notably different from what CDS's own dataset-page documentation implies)
+drove _parse()'s field names - see that method's docstring for specifics
+(the time dimension is "valid_time", not "time").
 
-ERA5T handling: ERA5 has ~5 day latency; requests for the last ~5 days
-return the preliminary ERA5T extension instead of final ERA5. CDS marks
-which is which via an "expver" dimension in the returned NetCDF (expver
-"0001" = final ERA5, "0005" = ERA5T) when a request spans the boundary.
-When the response has no expver dimension (a request entirely inside or
-entirely outside the ~5 day window), product type is inferred from how old
-the timestamp is relative to now. Either way, downstream code tags every row
-with its product_type so ingestion_dag's reconcile_era5_final task can later
-overwrite ERA5T rows once the final ERA5 value is available (see
-ingestion/loaders/weather_loader.py).
+ERA5T handling: ERA5 has ~5 day latency (in practice can run a bit longer -
+a live request for data 10 days old still came back tagged ERA5T); requests
+for recent data return the preliminary ERA5T extension instead of final
+ERA5. CDS marks which is which via a per-timestep "expver" coordinate in the
+returned NetCDF ("0001" = final ERA5, "0005" = ERA5T) - always present in
+observed responses, one value per hour, not a separate dimension to iterate.
+Downstream code tags every row with its product_type so ingestion_dag's
+reconcile_era5_final task can later overwrite ERA5T rows once the final
+ERA5 value is available (see ingestion/loaders/weather_loader.py).
 
 Relative humidity is not a direct ERA5 variable - it's derived from 2m
 temperature and 2m dewpoint temperature via the Magnus-Tetens approximation.
@@ -124,51 +121,55 @@ class ERA5Client:
             return self._parse(target, now=datetime.now(timezone.utc))
 
     def _parse(self, path: Path, now: datetime) -> list[WeatherReading]:
+        """Verified against a live CDS response (2026-09-20): the current
+        CDS-Beta/cfgrib-converted NetCDF names the time dimension
+        "valid_time" (not "time"), and "expver" is a per-timestep string
+        coordinate indexed by valid_time - each hour is tagged with exactly
+        one expver value ("0001"=final ERA5, "0005"=ERA5T), not a separate
+        dimension to select/loop over as earlier assumed. "number" (ensemble
+        member) is a scalar coordinate, irrelevant for the deterministic
+        reanalysis stream requested here.
+        """
         readings: list[WeatherReading] = []
         with xr.open_dataset(path) as ds:
-            has_expver = "expver" in ds.dims
+            has_expver = "expver" in ds.coords
 
-            for time_val in ds["time"].values:
+            for i, time_val in enumerate(ds["valid_time"].values):
                 observed_at = datetime.fromtimestamp(time_val.astype("datetime64[s]").astype(int), tz=timezone.utc)
-                default_product = (
-                    WeatherProductType.ERA5T
-                    if (now - observed_at) < ERA5_FINAL_LATENCY
-                    else WeatherProductType.ERA5
-                )
+
+                if has_expver:
+                    expver_val = str(ds["expver"].values[i]).strip()
+                    product_type = WeatherProductType.ERA5 if expver_val == "0001" else WeatherProductType.ERA5T
+                else:
+                    product_type = (
+                        WeatherProductType.ERA5T
+                        if (now - observed_at) < ERA5_FINAL_LATENCY
+                        else WeatherProductType.ERA5
+                    )
 
                 for lat in ds["latitude"].values:
                     for lon in ds["longitude"].values:
-                        sel_kwargs = {"time": time_val, "latitude": lat, "longitude": lon}
+                        point = ds.sel(valid_time=time_val, latitude=lat, longitude=lon)
+                        u = float(point["u10"].values)
+                        v = float(point["v10"].values)
+                        t = float(point["t2m"].values)
+                        td = float(point["d2m"].values)
+                        if math.isnan(u) or math.isnan(v) or math.isnan(t) or math.isnan(td):
+                            continue
 
-                        expver_candidates = ds["expver"].values if has_expver else [None]
-                        for expver in expver_candidates:
-                            point = ds.sel(**sel_kwargs, expver=expver) if expver is not None else ds.sel(**sel_kwargs)
-                            u = float(point["u10"].values)
-                            v = float(point["v10"].values)
-                            t = float(point["t2m"].values)
-                            td = float(point["d2m"].values)
-                            if math.isnan(u) or math.isnan(v) or math.isnan(t) or math.isnan(td):
-                                continue  # this expver slot has no data for this time (the other one does)
-
-                            product_type = default_product
-                            if expver is not None:
-                                product_type = (
-                                    WeatherProductType.ERA5 if str(expver) == "0001" else WeatherProductType.ERA5T
-                                )
-
-                            speed, direction = _wind_speed_direction(u, v)
-                            readings.append(
-                                WeatherReading(
-                                    grid_cell_id=grid_cell_id(float(lat), float(lon)),
-                                    lat=float(lat),
-                                    lon=float(lon),
-                                    observed_at=observed_at,
-                                    u_wind=u,
-                                    v_wind=v,
-                                    wind_speed=speed,
-                                    wind_direction=direction,
-                                    relative_humidity=_relative_humidity_from_dewpoint(t, td),
-                                    product_type=product_type,
-                                )
+                        speed, direction = _wind_speed_direction(u, v)
+                        readings.append(
+                            WeatherReading(
+                                grid_cell_id=grid_cell_id(float(lat), float(lon)),
+                                lat=float(lat),
+                                lon=float(lon),
+                                observed_at=observed_at,
+                                u_wind=u,
+                                v_wind=v,
+                                wind_speed=speed,
+                                wind_direction=direction,
+                                relative_humidity=_relative_humidity_from_dewpoint(t, td),
+                                product_type=product_type,
                             )
+                        )
         return readings
