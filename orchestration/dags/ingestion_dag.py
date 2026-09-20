@@ -45,4 +45,7 @@ with DAG(
 
     quality_check = PythonOperator(task_id="ingestion_data_quality_check", python_callable=_quality_check)
 
-    fetch_openaq >> fetch_era5_latest >> reconcile_era5 >> fetch_open_meteo >> quality_check
+    # Open-Meteo is independent of the ERA5 archive chain - an ERA5/CDS failure
+    # must not stop the near-term weather forecast (the inference-time input).
+    fetch_openaq >> fetch_era5_latest >> reconcile_era5 >> quality_check
+    fetch_openaq >> fetch_open_meteo >> quality_check

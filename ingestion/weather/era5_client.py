@@ -31,12 +31,14 @@ temperature and 2m dewpoint temperature via the Magnus-Tetens approximation.
 
 import logging
 import math
+import re
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import cdsapi
+import requests
 import xarray as xr
 
 from common.constants import WeatherProductType
@@ -46,6 +48,19 @@ logger = logging.getLogger(__name__)
 
 DATASET = "reanalysis-era5-single-levels"
 ERA5_FINAL_LATENCY = timedelta(days=6)  # conservative; reconcile task re-checks anyway
+
+# CDS rejects (HTTP 400) any request whose whole period is past the dataset's
+# publication edge, and names that edge in the message. Observed live on
+# 2026-09-20: "The latest date available for this dataset is: 2026-09-15 15:00"
+# - i.e. ERA5 lags "now" by ~5 days, so a "last 48h" request can never succeed.
+_LATEST_AVAILABLE_RE = re.compile(r"latest date available for this dataset is: (\d{4}-\d{2}-\d{2} \d{2}:\d{2})")
+
+
+def _latest_available_from_error(exc: requests.HTTPError) -> datetime | None:
+    match = _LATEST_AVAILABLE_RE.search(str(exc))
+    if not match:
+        return None
+    return datetime.strptime(match.group(1), "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -113,11 +128,26 @@ class ERA5Client:
         end: datetime,
         area: tuple[float, float, float, float] = DELHI_NCR_AREA,
     ) -> list[WeatherReading]:
-        request = _build_request(start, end, area)
+        """If the requested window is entirely past ERA5's publication edge,
+        slides it back (same length) so it ends at the newest available hour
+        and retries once - that is the freshest real ERA5T there is. Any
+        other error, or a second failure, propagates."""
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "era5_delhi_ncr.nc"
-            logger.info("Submitting CDS request for %s..%s", start, end)
-            self._client.retrieve(DATASET, request, str(target))
+            for attempt in (1, 2):
+                logger.info("Submitting CDS request for %s..%s", start, end)
+                try:
+                    self._client.retrieve(DATASET, _build_request(start, end, area), str(target))
+                    break
+                except requests.HTTPError as exc:
+                    latest = _latest_available_from_error(exc)
+                    if attempt == 2 or latest is None:
+                        raise
+                    logger.warning(
+                        "ERA5 has nothing for %s..%s (latest available: %s) - shifting window back",
+                        start, end, latest,
+                    )
+                    start, end = latest - (end - start), latest
             return self._parse(target, now=datetime.now(timezone.utc))
 
     def _parse(self, path: Path, now: datetime) -> list[WeatherReading]:
