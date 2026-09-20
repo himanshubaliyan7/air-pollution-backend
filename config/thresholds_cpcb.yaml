@@ -1,0 +1,70 @@
+# CPCB National AQI breakpoints, used by models/exceedance.py to convert a
+# forecast concentration (or exceedance probability) into an AQI category
+# and a go/caution/no-go recommendation.
+#
+# *** VERIFY BEFORE PRODUCTION USE ***
+# The concentration breakpoints below reflect the commonly published CPCB
+# National AQI methodology (2014) from general knowledge, NOT a live fetch
+# of the official document in this session. Cross-check every number against
+# the current official CPCB AQI calculation notification
+# (https://cpcb.nic.in) before this system makes a real go/no-go call for a
+# school. This file is deliberately kept out of code specifically so a
+# correction here never requires a code change or redeploy.
+#
+# Units: 24-hour average concentration in micrograms per cubic meter (ug/m3).
+pollutants:
+  pm25:
+    unit: ug/m3
+    averaging: 24h
+    breakpoints:
+      - category: good
+        aqi_range: [0, 50]
+        conc_range: [0, 30]
+      - category: satisfactory
+        aqi_range: [51, 100]
+        conc_range: [31, 60]
+      - category: moderate
+        aqi_range: [101, 200]
+        conc_range: [61, 90]
+      - category: poor
+        aqi_range: [201, 300]
+        conc_range: [91, 120]
+      - category: very_poor
+        aqi_range: [301, 400]
+        conc_range: [121, 250]
+      - category: severe
+        aqi_range: [401, 500]
+        conc_range: [251, 380]
+  no2:
+    unit: ug/m3
+    averaging: 24h
+    breakpoints:
+      - category: good
+        aqi_range: [0, 50]
+        conc_range: [0, 40]
+      - category: satisfactory
+        aqi_range: [51, 100]
+        conc_range: [41, 80]
+      - category: moderate
+        aqi_range: [101, 200]
+        conc_range: [81, 180]
+      - category: poor
+        aqi_range: [201, 300]
+        conc_range: [181, 280]
+      - category: very_poor
+        aqi_range: [301, 400]
+        conc_range: [281, 400]
+      - category: severe
+        aqi_range: [401, 500]
+        conc_range: [401, 600]
+
+# The AQI category at/above which schools should treat the day as
+# "outdoor practice not recommended". Operators can raise/lower this per
+# their own risk tolerance without any code change.
+health_threshold_category: poor
+
+# Decision threshold on the model's exceedance_probability (0-1) for setting
+# forecasts.exceedance_flag = true. Recall is weighted over precision here
+# (a missed bad-air day is worse than an extra false alarm) - see
+# models/exceedance.py.
+exceedance_probability_decision_threshold: 0.3

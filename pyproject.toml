@@ -1,0 +1,58 @@
+[project]
+name = "air-pollution-prediction"
+version = "0.1.0"
+description = "Hourly PM2.5/NO2 forecasting and health-threshold alerting for Delhi NCR"
+requires-python = ">=3.11"
+dependencies = [
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "psycopg2-binary>=2.9",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "pyyaml>=6.0",
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "python-dateutil>=2.9",
+    "tzdata>=2024.1",
+]
+
+[project.optional-dependencies]
+ingestion = [
+    "requests>=2.31",
+    "cdsapi>=0.7",
+    "xarray>=2024.2",
+    "netCDF4>=1.6",
+]
+models = [
+    "lightgbm>=4.3",
+    "scikit-learn>=1.4",
+]
+api = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "email-validator>=2.1",
+]
+dashboard = [
+    "streamlit>=1.32",
+    "plotly>=5.20",
+    "requests>=2.31",
+]
+alerting = [
+    "jinja2>=3.1",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "ruff>=0.3",
+]
+
+[tool.setuptools.packages.find]
+include = ["common*", "db*", "ingestion*", "features*", "models*", "api*", "alerting*"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

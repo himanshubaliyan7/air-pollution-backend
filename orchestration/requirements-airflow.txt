@@ -1,0 +1,35 @@
+# Installed on top of the apache/airflow base image (see orchestration/Dockerfile).
+# sqlalchemy is deliberately NOT pinned here - Airflow 2.9+ supports
+# SQLAlchemy 2.0, and this project's db/models.py uses 2.0-style
+# Mapped/mapped_column, so we let pip resolve to whatever 2.x version is
+# compatible with the base image's own Airflow-pinned constraints rather
+# than risking a conflicting pin.
+#
+# NOTE: pip will report that apache-airflow-providers-google/snowflake want
+# pandas<2.2 while this resolves pandas to 3.x - this project's DAGs never
+# import those providers, so it's a benign resolver warning, not a runtime
+# conflict. Verified: all project tests pass against pandas 3.0.6.
+#
+# sqlalchemy is NOT upgraded here - Airflow 2.9.3's own internal ORM models
+# (airflow.models.taskinstance etc.) are not SQLAlchemy-2.0-compatible and
+# the scheduler/webserver fail to even start under it (verified: forcing
+# sqlalchemy>=2.0 here crashes both with a MappedAnnotationError deep in
+# Airflow's own TaskInstance model). db/models.py therefore uses SQLAlchemy
+# 1.4-compatible legacy Column()/declarative_base() syntax instead of 2.0's
+# Mapped[]/mapped_column(), so the one schema file works unmodified against
+# whatever SQLAlchemy version each service's base image ships.
+psycopg2-binary>=2.9
+pydantic>=2.6
+pydantic-settings>=2.2
+pyyaml>=6.0
+pandas>=2.2
+numpy>=1.26
+python-dateutil>=2.9
+tzdata>=2024.1
+requests>=2.31
+cdsapi>=0.7
+xarray>=2024.2
+netCDF4>=1.6
+lightgbm>=4.3
+scikit-learn>=1.4
+jinja2>=3.1

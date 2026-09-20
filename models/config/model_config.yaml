@@ -1,0 +1,25 @@
+# Model training config. Horizons/quantiles mirror config/settings.yaml's
+# forecast section (the single source for what the product surfaces);
+# hyperparams live here since they're a modeling concern, not a product one.
+horizons_hours: [24, 48, 72, 96, 120]
+quantiles: [0.1, 0.5, 0.9]
+
+lightgbm:
+  quantile:
+    n_estimators: 200
+    num_leaves: 31
+    learning_rate: 0.05
+    min_child_samples: 10
+  classifier:
+    n_estimators: 200
+    num_leaves: 31
+    learning_rate: 0.05
+    min_child_samples: 10
+    is_unbalance: true
+
+training:
+  # Trailing window pulled by retraining_dag; shorter default here so a
+  # small amount of backfilled/seed data is still trainable in dev.
+  default_training_window_days: 365
+  holdout_days: 30
+  min_training_rows: 100

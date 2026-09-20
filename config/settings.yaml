@@ -1,0 +1,35 @@
+# Non-secret, operator-editable app configuration.
+
+forecast:
+  horizons_hours: [24, 48, 72, 96, 120]
+  quantiles: [0.1, 0.5, 0.9]
+
+features:
+  lag_hours: [1, 3, 6, 12, 24, 48]
+  rolling_windows_hours: [6, 24, 48]
+  feature_set_version: "v1"
+
+# How an hourly forecast series is collapsed into a single per-day
+# exceedance decision - the actual unit schools plan against. "school_hours"
+# only considers the window outdoor practice would occur; all bucketing uses
+# IST calendar days (see common/config.py:ist_calendar_date), never naive
+# UTC days.
+daily_exceedance:
+  aggregation: max  # one of: max, mean, school_hours_max
+  school_hours_ist: ["08:00", "16:00"]
+
+calendar:
+  # Diwali is a lunar-calendar date that shifts year to year - this list
+  # must be updated annually. Stubble-burning season is a fixed seasonal
+  # window in Delhi NCR (roughly mid-Oct to end-Nov).
+  diwali_dates:
+    - "2025-10-20"
+    - "2026-11-08"
+  stubble_burning_season:
+    start_month_day: "10-01"
+    end_month_day: "11-30"
+
+alerting:
+  # Only send an alert when exceedance_flag flips false->true for a given
+  # target day, not on every hourly forecast re-run.
+  notify_on_new_crossing_only: true

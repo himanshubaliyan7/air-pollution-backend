@@ -1,0 +1,32 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# secrets / env
+docker/.env
+.env
+.cdsapirc
+
+# data & artifacts
+models/artifacts/
+*.parquet
+*.csv
+data/
+
+# airflow runtime
+orchestration/logs/
+orchestration/airflow.cfg
+orchestration/airflow.db
+
+# IDE
+.vscode/
+.idea/
+
+# test/coverage
+.pytest_cache/
+.coverage
+htmlcov/

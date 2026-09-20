@@ -1,0 +1,132 @@
+x-airflow-common: &airflow-common
+  build:
+    context: ..
+    dockerfile: orchestration/Dockerfile
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR:-LocalExecutor}
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW_DATABASE_URL}
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-}
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY:-change-me}
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    DATABASE_URL: ${DATABASE_URL}
+    OPENAQ_API_KEY: ${OPENAQ_API_KEY}
+    CDS_API_URL: ${CDS_API_URL}
+    CDS_API_KEY: ${CDS_API_KEY}
+    SMTP_HOST: ${SMTP_HOST}
+    SMTP_PORT: ${SMTP_PORT}
+    SMTP_USER: ${SMTP_USER}
+    SMTP_PASSWORD: ${SMTP_PASSWORD}
+    ALERT_FROM_ADDRESS: ${ALERT_FROM_ADDRESS}
+  volumes:
+    - ../config:/app/config:ro
+    - airflow_logs:/opt/airflow/logs
+    - model_artifacts:/app/models/artifacts
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: timescale/timescaledb:2.14.2-pg15
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-airpollution}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../orchestration/include/sql:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5433:5432" # 5432 avoided - commonly collides with a host-installed Postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  db-migrate:
+    build:
+      context: ..
+      dockerfile: db/Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username "${AIRFLOW_ADMIN_USER:-admin}" \
+          --password "${AIRFLOW_ADMIN_PASSWORD:-admin}" \
+          --firstname Admin --lastname User \
+          --role Admin --email "${AIRFLOW_ADMIN_EMAIL:-admin@example.com}" || true
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    depends_on:
+      - airflow-init
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    depends_on:
+      - airflow-init
+
+  api:
+    build:
+      context: ..
+      dockerfile: api/Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      AQI_THRESHOLD_CONFIG_PATH: ${AQI_THRESHOLD_CONFIG_PATH:-/app/config/thresholds_cpcb.yaml}
+      STATIONS_CONFIG_PATH: ${STATIONS_CONFIG_PATH:-/app/config/stations_delhi_ncr.yaml}
+      SETTINGS_CONFIG_PATH: ${SETTINGS_CONFIG_PATH:-/app/config/settings.yaml}
+    volumes:
+      - ../config:/app/config:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+
+  dashboard:
+    build:
+      context: ..
+      dockerfile: dashboard/Dockerfile
+    environment:
+      API_BASE_URL: ${API_BASE_URL:-http://api:8000}
+      AQI_THRESHOLD_CONFIG_PATH: ${AQI_THRESHOLD_CONFIG_PATH:-/app/config/thresholds_cpcb.yaml}
+      SETTINGS_CONFIG_PATH: ${SETTINGS_CONFIG_PATH:-/app/config/settings.yaml}
+    volumes:
+      - ../config:/app/config:ro
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
+
+  # Dev-only SMTP catcher so alert emails can be verified locally without a
+  # real mail provider. Not used in a real deployment - point SMTP_HOST at a
+  # real provider there instead.
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    ports:
+      - "8025:8025" # web UI
+      - "1025:1025" # smtp
+
+volumes:
+  pgdata:
+  airflow_logs:
+  model_artifacts:
