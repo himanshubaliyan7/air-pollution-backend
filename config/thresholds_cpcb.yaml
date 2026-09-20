@@ -2,14 +2,20 @@
 # forecast concentration (or exceedance probability) into an AQI category
 # and a go/caution/no-go recommendation.
 #
-# *** VERIFY BEFORE PRODUCTION USE ***
-# The concentration breakpoints below reflect the commonly published CPCB
-# National AQI methodology (2014) from general knowledge, NOT a live fetch
-# of the official document in this session. Cross-check every number against
-# the current official CPCB AQI calculation notification
-# (https://cpcb.nic.in) before this system makes a real go/no-go call for a
-# school. This file is deliberately kept out of code specifically so a
-# correction here never requires a code change or redeploy.
+# VERIFICATION STATUS (checked 2026-09-20):
+# Every PM2.5 and NO2 category boundary below (AQI ranges and concentration
+# ranges, 24-hour averaging) matches the Indian AQI table published by
+# aqihub.info/indices/india, and CPCB's own anchor points (PM2.5 sub-index 51
+# at 31 ug/m3, 100 at 60 ug/m3) agree. That is a SECONDARY source: the
+# official CPCB documents (cpcb.nic.in -> cpcb.gov.in) could not be fetched
+# because cpcb.gov.in served an expired TLS certificate. Re-check against the
+# official "About National Air Quality Index" PDF when it is reachable.
+# The "severe" upper concentration bounds (380 for pm25, 600 for no2) are NOT
+# from the table (which lists them open-ended, "250+" / "400+"); they are only
+# a cap for interpolating a sub-index and do not affect the go/no-go category.
+# The health_threshold_category ("poor": PM2.5 >= 91 ug/m3) uses verified rows.
+# This file is deliberately kept out of code so a correction here never
+# requires a code change or redeploy.
 #
 # Units: 24-hour average concentration in micrograms per cubic meter (ug/m3).
 pollutants:
