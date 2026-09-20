@@ -111,12 +111,44 @@ def ingest_open_meteo_forecast(forecast_days: int = 7) -> int:
         session.close()
 
 
+def summarize_data_age(newest_by_station: dict[str, datetime | None], now: datetime) -> dict[str, int]:
+    """Buckets stations by how old their newest reading is. Upstream OpenAQ/CPCB
+    data lags badly (verified 2026-09-20: most stations days behind), and that
+    silently decides how many stations can be forecast at all - so every
+    ingestion run reports it."""
+    buckets = {"<=6h": 0, "<=24h": 0, "<=72h": 0, ">72h": 0, "never": 0}
+    for newest in newest_by_station.values():
+        if newest is None:
+            buckets["never"] += 1
+            continue
+        hours = (now - newest).total_seconds() / 3600
+        key = "<=6h" if hours <= 6 else "<=24h" if hours <= 24 else "<=72h" if hours <= 72 else ">72h"
+        buckets[key] += 1
+    return buckets
+
+
 def ingestion_data_quality_check(sensor_rows: int, weather_rows: int) -> None:
     session = get_session()
     try:
         stations = _active_stations(session)
+        newest = {
+            sid: ts
+            for sid, ts in session.execute(
+                select(RawSensorReading.station_id, func.max(RawSensorReading.observed_at)).group_by(
+                    RawSensorReading.station_id
+                )
+            )
+        }
     finally:
         session.close()
+
+    if stations:
+        ages = summarize_data_age({s.station_id: newest.get(s.station_id) for s in stations}, datetime.now(timezone.utc))
+        logger.info("Active stations by age of newest reading: %s (of %d)", ages, len(stations))
+        if ages["<=6h"] == 0:
+            logger.warning(
+                "No active station has a reading newer than %dh - no forecasts can be generated", MAX_INPUT_STALENESS_HOURS
+            )
 
     if stations and sensor_rows == 0 and weather_rows == 0:
         logger.error(
@@ -125,6 +157,43 @@ def ingestion_data_quality_check(sensor_rows: int, weather_rows: int) -> None:
             len(stations),
         )
         raise RuntimeError("ingestion_data_quality_check: zero rows ingested with active stations configured")
+
+
+def refresh_station_activity(max_dark_days: int = 30) -> dict[str, int]:
+    """Marks stations inactive when OpenAQ says they have not reported for
+    `max_dark_days` (or ever), and reactivates any that have resumed. Dark
+    stations otherwise cost several API calls per hourly ingestion run for
+    nothing (39 of 124 Delhi NCR locations had been dark for 30+ days,
+    verified 2026-09-20)."""
+    from ingestion.config import DELHI_NCR_BBOX, DELHI_NCR_COUNTRY_ISO
+
+    session = get_session()
+    try:
+        source = SENSOR_SOURCE_REGISTRY[ACTIVE_SOURCE](api_key=get_settings().openaq_api_key)
+        last_seen = source.location_last_data_times(bbox=DELHI_NCR_BBOX, country=DELHI_NCR_COUNTRY_ISO)
+        if not last_seen:
+            # An empty answer means the call misbehaved, not that every
+            # station vanished - never deactivate the whole network on that.
+            raise RuntimeError("OpenAQ returned no locations; refusing to change station activity")
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_dark_days)
+        deactivated = reactivated = 0
+        for station in session.execute(select(Station)).scalars().all():
+            if station.source_location_id not in last_seen:
+                continue  # unknown to OpenAQ this time; leave as is
+            newest = last_seen[station.source_location_id]
+            should_be_active = newest is not None and newest >= cutoff
+            if station.is_active and not should_be_active:
+                station.is_active = False
+                deactivated += 1
+            elif not station.is_active and should_be_active:
+                station.is_active = True
+                reactivated += 1
+        session.commit()
+        logger.info("Station activity refreshed: %d deactivated, %d reactivated", deactivated, reactivated)
+        return {"deactivated": deactivated, "reactivated": reactivated}
+    finally:
+        session.close()
 
 
 # --------------------------------------------------------- feature engineering

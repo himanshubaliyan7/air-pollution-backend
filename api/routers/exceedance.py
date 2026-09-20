@@ -10,17 +10,15 @@ in for its calendar day; no further aggregation of forecast points is
 needed, only bucketing each row's target_time to its IST calendar day.
 """
 
-from datetime import datetime, timedelta, timezone
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db import get_db
-from api.routers.forecasts import _latest_forecast_made_at
+from api.routers.forecasts import _latest_forecast_made_at, is_forecast_current
 from api.schemas.forecasts import ExceedanceDayOut, ExceedanceSummaryOut
 from common.config import to_ist
-from common.constants import MAX_INPUT_STALENESS_HOURS, Pollutant
+from common.constants import Pollutant
 from db.models import Forecast, Station
 from models.exceedance import get_aqi_category, load_thresholds
 
@@ -43,7 +41,7 @@ def get_exceedance_summary(
     # No forecast, or one anchored on input older than generate_forecasts is
     # willing to use (the upstream feed lags; most stations are days behind),
     # must never read as "go" - a school would treat silence as clearance.
-    if made_at is None or datetime.now(timezone.utc) - made_at > timedelta(hours=MAX_INPUT_STALENESS_HOURS):
+    if not is_forecast_current(made_at):
         return ExceedanceSummaryOut(station_id=station_id, pollutant=pollutant.value, days=[], overall_recommendation="no-data")
 
     rows = db.execute(

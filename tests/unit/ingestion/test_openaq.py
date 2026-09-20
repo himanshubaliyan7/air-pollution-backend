@@ -248,3 +248,21 @@ def test_pagination_stops_on_short_page():
     source = OpenAQSource(api_key="test-key", session=FakeSession(responses))
     stations = source.list_stations(bbox=(0, 0, 1, 1), country="IN")
     assert len(stations) == 1
+
+
+def test_location_last_data_times_parses_datetime_last_and_missing():
+    responses = {
+        "/locations": FakeResponse(
+            {
+                "meta": {"found": 3},
+                "results": [
+                    {"id": 1, "datetimeLast": {"utc": "2026-09-20T13:00:00Z", "local": "x"}},
+                    {"id": 2, "datetimeLast": None},
+                    {"id": 3},
+                ],
+            }
+        )
+    }
+    source = OpenAQSource(api_key="k", session=FakeSession(responses))
+    out = source.location_last_data_times(bbox=(76.6, 28.2, 77.6, 29.0), country="IN")
+    assert out == {"1": datetime(2026, 9, 20, 13, tzinfo=timezone.utc), "2": None, "3": None}

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from api.db import get_db
 from api.schemas.forecasts import ForecastPointOut, ForecastSeriesOut, HistoryOut, HistoryPointOut
 from api.schemas.model_health import ModelHealthOut
-from common.constants import Pollutant
+from common.constants import MAX_INPUT_STALENESS_HOURS, Pollutant
 from db.models import ExceedanceEvaluation, Forecast, RawSensorReading, Station
 
 router = APIRouter(tags=["forecasts"])
@@ -19,6 +19,13 @@ def _latest_forecast_made_at(db: Session, station_id: str, pollutant: Pollutant)
             Forecast.station_id == station_id, Forecast.pollutant == pollutant
         )
     ).scalar_one_or_none()
+
+
+def is_forecast_current(made_at: datetime | None) -> bool:
+    """A forecast is only actionable while it is as fresh as generate_forecasts
+    would accept its input (MAX_INPUT_STALENESS_HOURS); older, it must be
+    treated as no forecast at all, never as an implicit "go"."""
+    return made_at is not None and datetime.now(timezone.utc) - made_at <= timedelta(hours=MAX_INPUT_STALENESS_HOURS)
 
 
 @router.get("/forecast/{station_id}", response_model=ForecastSeriesOut)

@@ -127,6 +127,21 @@ class OpenAQSource(SensorSource):
             )
         return stations
 
+    def location_last_data_times(
+        self, *, bbox: tuple[float, float, float, float], country: str
+    ) -> dict[str, datetime | None]:
+        """OpenAQ's own record of when each location last reported (the
+        location's `datetimeLast`), one paginated /locations call for the
+        whole bbox. Used to spot stations that have gone dark upstream
+        without spending a request per sensor to find out."""
+        min_lon, min_lat, max_lon, max_lat = bbox
+        params = {"bbox": f"{min_lon},{min_lat},{max_lon},{max_lat}", "iso": country}
+        out: dict[str, datetime | None] = {}
+        for loc in self._paginate("/locations", params):
+            raw = ((loc.get("datetimeLast") or {}).get("utc"))
+            out[str(loc["id"])] = datetime.fromisoformat(raw.replace("Z", "+00:00")) if raw else None
+        return out
+
     def _resolve_sensor_ids(self, location_id: str, pollutants: list[Pollutant]) -> dict[Pollutant, int]:
         cached = self._sensor_cache.get(location_id)
         if cached is not None:

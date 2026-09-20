@@ -19,8 +19,16 @@ if not stations:
         "to discover Delhi NCR stations, then let ingestion/feature/forecast DAGs run at least once."
     )
 else:
-    st.session_state.setdefault("station_id", stations[0]["station_id"])
-    station_names = {s["station_id"]: f"{s['name']} ({s['station_id']})" for s in stations}
+    st.session_state.setdefault("station_id", stations[0]["station_id"])  # API lists stations with a current forecast first
+    current = [s for s in stations if s["has_current_forecast"]]
+    st.caption(
+        f"{len(current)} of {len(stations)} stations have a current forecast. Sensor data for the rest is delayed "
+        "upstream (most CPCB stations are days behind), so no forecast can be made for them yet."
+    )
+    station_names = {
+        s["station_id"]: f"{s['name']} ({s['station_id']})" + ("" if s["has_current_forecast"] else " - no current data")
+        for s in stations
+    }
     selected = st.selectbox(
         "Station",
         options=list(station_names.keys()),
