@@ -131,3 +131,37 @@ def test_incomplete_forecast_run_never_reads_as_go(db_session):
 
     body = TestClient(app).get(f"/api/v1/forecast/{sid}/exceedance", params={"pollutant": "pm25", "days_ahead": 3}).json()
     assert body["overall_recommendation"] == "go"  # complete for what was asked
+
+
+def test_regions_endpoint_and_station_region_and_local_day(db_session):
+    """The frontend must not hardcode a region: name, time zone, AQI standard and
+    category order come from the API, stations carry region_id, and per-day
+    dates are calendar days in the region's zone (not UTC)."""
+    from tests.integration.test_api import _seed_station_and_forecast  # noqa: PLC0415
+    from api.main import app
+    from db.models import Forecast
+    from sqlalchemy import update
+
+    client = TestClient(app)
+    regions = client.get("/api/v1/regions").json()
+    assert [r["id"] for r in regions] == ["delhi-ncr"]
+    r = regions[0]
+    assert r["timezone"] == "Asia/Kolkata" and r["aqi_standard"] == "CPCB National AQI"
+    assert [c["id"] for c in r["aqi_categories"]] == ["good", "satisfactory", "moderate", "poor", "very_poor", "severe"]
+    assert r["health_threshold_category"] == "poor" and set(r["pollutants"]) == {"pm25", "no2"}
+    assert client.get("/api/v1/regions/delhi-ncr").json()["id"] == "delhi-ncr"
+    assert client.get("/api/v1/regions/nowhere").status_code == 404
+
+    sid = _seed_station_and_forecast(db_session)  # lat 28.6 lon 77.2 -> inside delhi-ncr
+    assert client.get(f"/api/v1/stations/{sid}").json()["region_id"] == "delhi-ncr"
+    assert [s["station_id"] for s in client.get("/api/v1/stations", params={"region_id": "delhi-ncr"}).json()] == [sid]
+    assert client.get("/api/v1/stations", params={"region_id": "nowhere"}).json() == []
+
+    # 20:00 UTC is 01:30 the NEXT day in Asia/Kolkata: the day bucket must follow the region zone.
+    made = datetime.now(timezone.utc).replace(hour=20, minute=0, second=0, microsecond=0)
+    db_session.execute(update(Forecast).values(forecast_made_at=NOW))  # keep the whole run together
+    db_session.execute(update(Forecast).where(Forecast.horizon_hours == 24).values(target_time=made))
+    db_session.commit()
+    body = client.get(f"/api/v1/forecast/{sid}/exceedance", params={"pollutant": "pm25"}).json()
+    assert body["timezone"] == "Asia/Kolkata"
+    assert str(made.date() + timedelta(days=1)) in [d["date"] for d in body["days"]]

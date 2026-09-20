@@ -1,19 +1,25 @@
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from api.db import get_db
 from api.routers.forecasts import is_forecast_current
 from api.schemas.stations import StationDetailOut, StationOut
+from common.regions import region_for_point
 from db.models import Forecast, RawSensorReading, Station
 
 router = APIRouter(prefix="/stations", tags=["stations"])
 
 
+def _region_id(station: Station) -> str | None:
+    region = region_for_point(station.lat, station.lon)
+    return region.id if region else None
+
+
 @router.get("", response_model=list[StationOut])
-def list_stations(db: Session = Depends(get_db)):
+def list_stations(region_id: str | None = Query(None), db: Session = Depends(get_db)):
     """Stations with a current forecast come first: the upstream sensor feed
     lags for most of the network, so most stations cannot be forecast right now
     and clients need to tell them apart."""
@@ -43,11 +49,14 @@ def list_stations(db: Session = Depends(get_db)):
             lon=s.lon,
             city=s.city,
             is_active=s.is_active,
+            region_id=_region_id(s),
             latest_observed_at=latest_reading.get(s.station_id),
             has_current_forecast=is_forecast_current(latest_forecast.get(s.station_id)),
         )
         for s in stations
     ]
+    if region_id is not None:
+        out = [s for s in out if s.region_id == region_id]
     out.sort(key=lambda s: (not s.has_current_forecast, s.name))
     return out
 
@@ -72,6 +81,7 @@ def get_station(station_id: str, db: Session = Depends(get_db)):
         lon=station.lon,
         city=station.city,
         is_active=station.is_active,
+        region_id=_region_id(station),
         latest_observed_at=latest,
         has_current_forecast=is_forecast_current(made_at),
     )

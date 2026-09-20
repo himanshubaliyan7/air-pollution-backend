@@ -33,6 +33,8 @@ class ExceedanceDayOut(BaseModel):
 class ExceedanceSummaryOut(BaseModel):
     station_id: str
     pollutant: str
+    # IANA zone in which each day's `date` is a calendar day (the station's region's zone).
+    timezone: str | None = None
     days: list[ExceedanceDayOut]
     overall_recommendation: str  # "go" | "caution" | "no-go" | "no-data" ("no-data" may still carry partial `days`)
 

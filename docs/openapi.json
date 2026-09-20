@@ -5,6 +5,73 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/v1/regions": {
+      "get": {
+        "tags": [
+          "regions"
+        ],
+        "summary": "List Regions",
+        "operationId": "list_regions_api_v1_regions_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RegionOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Regions Api V1 Regions Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/regions/{region_id}": {
+      "get": {
+        "tags": [
+          "regions"
+        ],
+        "summary": "Get Region Detail",
+        "operationId": "get_region_detail_api_v1_regions__region_id__get",
+        "parameters": [
+          {
+            "name": "region_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Region Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/stations": {
       "get": {
         "tags": [
@@ -13,17 +80,45 @@
         "summary": "List Stations",
         "description": "Stations with a current forecast come first: the upstream sensor feed\nlags for most of the network, so most stations cannot be forecast right now\nand clients need to tell them apart.",
         "operationId": "list_stations_api_v1_stations_get",
+        "parameters": [
+          {
+            "name": "region_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Region Id"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
+                  "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/StationOut"
                   },
-                  "type": "array",
                   "title": "Response List Stations Api V1 Stations Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -441,6 +536,24 @@
   },
   "components": {
     "schemas": {
+      "AqiCategoryOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "AqiCategoryOut"
+      },
       "ExceedanceDayOut": {
         "properties": {
           "date": {
@@ -484,6 +597,17 @@
           "pollutant": {
             "type": "string",
             "title": "Pollutant"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
           },
           "days": {
             "items": {
@@ -768,6 +892,68 @@
         ],
         "title": "Pollutant"
       },
+      "RegionOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "country": {
+            "type": "string",
+            "title": "Country"
+          },
+          "timezone": {
+            "type": "string",
+            "title": "Timezone"
+          },
+          "bbox": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Bbox"
+          },
+          "aqi_standard": {
+            "type": "string",
+            "title": "Aqi Standard"
+          },
+          "pollutants": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Pollutants"
+          },
+          "aqi_categories": {
+            "items": {
+              "$ref": "#/components/schemas/AqiCategoryOut"
+            },
+            "type": "array",
+            "title": "Aqi Categories"
+          },
+          "health_threshold_category": {
+            "type": "string",
+            "title": "Health Threshold Category"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "country",
+          "timezone",
+          "bbox",
+          "aqi_standard",
+          "pollutants",
+          "aqi_categories",
+          "health_threshold_category"
+        ],
+        "title": "RegionOut"
+      },
       "StationDetailOut": {
         "properties": {
           "station_id": {
@@ -793,6 +979,17 @@
           "is_active": {
             "type": "boolean",
             "title": "Is Active"
+          },
+          "region_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region Id"
           },
           "latest_observed_at": {
             "anyOf": [
@@ -848,6 +1045,17 @@
           "is_active": {
             "type": "boolean",
             "title": "Is Active"
+          },
+          "region_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region Id"
           },
           "latest_observed_at": {
             "anyOf": [

@@ -7,8 +7,10 @@ neighbors (24h, 48h, ...), so - unlike models/exceedance.daily_aggregate,
 which collapses many REALIZED hourly readings into one actual-vs-forecast
 comparison for evaluation - here each horizon's forecast row already stands
 in for its calendar day; no further aggregation of forecast points is
-needed, only bucketing each row's target_time to its IST calendar day.
+needed, only bucketing each row's target_time to its station-local calendar day.
 """
+
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -17,7 +19,7 @@ from sqlalchemy.orm import Session
 from api.db import get_db
 from api.routers.forecasts import _latest_forecast_made_at, is_forecast_current
 from api.schemas.forecasts import ExceedanceDayOut, ExceedanceSummaryOut
-from common.config import to_ist
+from common.regions import region_for_point
 from common.constants import DEFAULT_HORIZONS_HOURS, Pollutant
 from db.models import Forecast, Station
 from models.exceedance import get_aqi_category, load_thresholds
@@ -34,15 +36,20 @@ def get_exceedance_summary(
     days_ahead: int = Query(5, ge=1, le=14),
     db: Session = Depends(get_db),
 ):
-    if db.get(Station, station_id) is None:
+    station = db.get(Station, station_id)
+    if station is None:
         raise HTTPException(status_code=404, detail="station not found")
+    region = region_for_point(station.lat, station.lon)
+    tz_name = region.timezone if region else "UTC"
 
     made_at = _latest_forecast_made_at(db, station_id, pollutant)
     # No forecast, or one anchored on input older than generate_forecasts is
     # willing to use (the upstream feed lags; most stations are days behind),
     # must never read as "go" - a school would treat silence as clearance.
     if not is_forecast_current(made_at):
-        return ExceedanceSummaryOut(station_id=station_id, pollutant=pollutant.value, days=[], overall_recommendation="no-data")
+        return ExceedanceSummaryOut(
+            station_id=station_id, pollutant=pollutant.value, timezone=tz_name, days=[], overall_recommendation="no-data"
+        )
 
     rows = db.execute(
         select(Forecast)
@@ -59,12 +66,12 @@ def get_exceedance_summary(
 
     by_day: dict = {}
     for r in rows:
-        ist_date = to_ist(r.target_time).date()
-        existing = by_day.get(ist_date)
-        # If more than one horizon lands on the same IST day, keep the
+        local_date = r.target_time.astimezone(ZoneInfo(tz_name)).date()
+        existing = by_day.get(local_date)
+        # If more than one horizon lands on the same local day, keep the
         # worst-case (highest exceedance probability) one.
         if existing is None or r.exceedance_probability > existing.exceedance_probability:
-            by_day[ist_date] = r
+            by_day[local_date] = r
 
     days = [
         ExceedanceDayOut(
@@ -93,5 +100,5 @@ def get_exceedance_summary(
         recommendation = "go"
 
     return ExceedanceSummaryOut(
-        station_id=station_id, pollutant=pollutant.value, days=days, overall_recommendation=recommendation
+        station_id=station_id, pollutant=pollutant.value, timezone=tz_name, days=days, overall_recommendation=recommendation
     )
