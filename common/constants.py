@@ -42,6 +42,13 @@ class AlertStatus(str, enum.Enum):
 # Direct multi-horizon forecast targets, in hours ahead.
 DEFAULT_HORIZONS_HOURS = [24, 48, 72, 96, 120]
 
+# Oldest sensor input a forecast may be made from. OpenAQ/CPCB data is not
+# real-time: verified 2026-09-20 that most stations trail by days (61 of 124
+# stopped at 09-17 13:00 upstream) and the rest by ~2h. A forecast anchored on
+# a days-old reading would be presented to schools as current, so stations
+# staler than this are skipped and reported instead.
+MAX_INPUT_STALENESS_HOURS = 6
+
 # Quantiles fitted per horizon; used both for uncertainty bands and for
 # interpolating P(value > threshold) in models/exceedance.py.
 DEFAULT_QUANTILES = [0.1, 0.5, 0.9]

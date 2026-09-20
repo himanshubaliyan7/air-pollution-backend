@@ -9,10 +9,16 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from common.config import get_settings
-from common.constants import DEFAULT_HORIZONS_HOURS, ModelType, Pollutant, SensorSourceName
+from common.constants import (
+    DEFAULT_HORIZONS_HOURS,
+    MAX_INPUT_STALENESS_HOURS,
+    ModelType,
+    Pollutant,
+    SensorSourceName,
+)
 from db.models import Forecast, ModelRun, RawSensorReading, Station
 from db.session import get_session
 from features.build_features import build_feature_frame
@@ -144,17 +150,51 @@ def compute_and_write_features(lookback_hours: int = 6) -> int:
 
 # -------------------------------------------------------------------- forecast
 
+def forecast_anchor(newest_reading: datetime | None, now_hour: datetime) -> datetime | None:
+    """The as_of hour to forecast from for one station/pollutant, or None if
+    its newest reading is missing or older than MAX_INPUT_STALENESS_HOURS.
+
+    Anchors on the newest hour that actually has a reading, not on "now": the
+    upstream feed lags, and build_feature_frame only yields lag/rolling values
+    for an as_of that has an observation (which is also exactly what training
+    saw, so there is no train/serve skew). Horizons are 24-120h, so a few
+    hours of anchor lag is immaterial."""
+    if newest_reading is None:
+        return None
+    as_of = min(now_hour, newest_reading.replace(minute=0, second=0, microsecond=0))
+    if now_hour - as_of > timedelta(hours=MAX_INPUT_STALENESS_HOURS):
+        return None
+    return as_of
+
+
 def generate_forecasts() -> dict:
     session = get_session()
     try:
         stations = _active_stations(session)
         thresholds = exceedance.load_thresholds()
-        as_of = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        now_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+
+        latest_reading = {
+            (sid, pol): ts
+            for sid, pol, ts in session.execute(
+                select(
+                    RawSensorReading.station_id,
+                    RawSensorReading.pollutant,
+                    func.max(RawSensorReading.observed_at),
+                ).group_by(RawSensorReading.station_id, RawSensorReading.pollutant)
+            )
+        }
 
         written = 0
+        skipped_stale = 0
         new_crossings: list[dict] = []
         for station in stations:
             for pollutant in Pollutant:
+                as_of = forecast_anchor(latest_reading.get((station.station_id, pollutant)), now_hour)
+                if as_of is None:
+                    skipped_stale += 1
+                    continue
+
                 for horizon in DEFAULT_HORIZONS_HOURS:
                     result = predict.forecast(
                         session, station.station_id, pollutant, horizon, as_of,
@@ -209,7 +249,11 @@ def generate_forecasts() -> dict:
                             }
                         )
         session.commit()
-        return {"forecasts_written": written, "new_crossings": new_crossings}
+        logger.info(
+            "Forecasts written: %d; station/pollutant pairs skipped for input older than %dh: %d",
+            written, MAX_INPUT_STALENESS_HOURS, skipped_stale,
+        )
+        return {"forecasts_written": written, "skipped_stale": skipped_stale, "new_crossings": new_crossings}
     finally:
         session.close()
 
