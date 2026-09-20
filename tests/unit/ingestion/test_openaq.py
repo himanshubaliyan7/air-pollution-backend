@@ -107,6 +107,43 @@ def test_fetch_readings_resolves_sensors_and_parses_hours():
     assert r.source_location_id == "111"
 
 
+def test_sensor_ids_are_cached_across_fetch_readings_calls():
+    """A multi-chunk backfill calls fetch_readings once per date range for
+    the same station list - resolving sensor ids fresh every time multiplies
+    real request volume and burns through OpenAQ's rate limit (this
+    regressed in practice during a real 180-day backfill)."""
+    calls = {"locations": 0}
+
+    class CountingSession(FakeSession):
+        def get(self, url, params=None, timeout=None):
+            if "/locations/" in url:
+                calls["locations"] += 1
+            return super().get(url, params=params, timeout=timeout)
+
+    responses = {
+        "/locations/111": FakeResponse(
+            {"id": 111, "sensors": [{"id": 9001, "parameter": {"name": "pm25", "units": "ug/m3"}}]}
+        ),
+        "/sensors/9001/hours": FakeResponse({"meta": {"found": 0}, "results": []}),
+    }
+    source = OpenAQSource(api_key="test-key", session=CountingSession(responses))
+
+    source.fetch_readings(
+        source_location_ids=["111"],
+        pollutants=[Pollutant.PM25],
+        start=datetime(2026, 9, 1, tzinfo=timezone.utc),
+        end=datetime(2026, 9, 2, tzinfo=timezone.utc),
+    )
+    source.fetch_readings(
+        source_location_ids=["111"],
+        pollutants=[Pollutant.PM25],
+        start=datetime(2026, 9, 8, tzinfo=timezone.utc),
+        end=datetime(2026, 9, 9, tzinfo=timezone.utc),
+    )
+
+    assert calls["locations"] == 1  # second call reused the cached sensor id
+
+
 def test_pagination_stops_on_short_page():
     responses = {
         "/locations": FakeResponse(

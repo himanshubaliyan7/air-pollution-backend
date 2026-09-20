@@ -30,7 +30,16 @@ from orchestration.plugins.common.tasks import _active_stations
 logger = logging.getLogger(__name__)
 
 
-def backfill_sensor_readings(days: int, chunk_days: int = 7) -> int:
+def backfill_sensor_readings(days: int, chunk_days: int = 30) -> int:
+    """chunk_days is a resilience checkpoint (a failure partway through only
+    loses one chunk's progress), not a pagination necessity - OpenAQSource's
+    own _paginate already handles arbitrarily long date ranges via the
+    /sensors/{id}/hours endpoint's page/limit params. Smaller chunks
+    multiply total HTTP requests for no benefit (each chunk re-issues one
+    request per station/pollutant regardless of how many hours it covers),
+    which is what actually drove OpenAQ rate limiting during a real backfill
+    - 30 days keeps that multiplier low while still checkpointing progress
+    a few times over a long backfill."""
     session = get_session()
     try:
         settings = get_settings()

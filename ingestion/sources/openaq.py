@@ -42,6 +42,14 @@ class OpenAQSource(SensorSource):
             raise ValueError("OpenAQSource requires a non-empty OpenAQ API key")
         self._session = session or requests.Session()
         self._session.headers.update({"X-API-Key": api_key})
+        # Sensor ids for a location never change within a source instance's
+        # lifetime - caching avoids re-resolving them on every fetch_readings
+        # call. Matters a lot for a multi-chunk backfill (scripts/backfill_history.py
+        # calls fetch_readings once per date chunk for the same station list) -
+        # without this, a 180-day backfill in weekly chunks re-issues a
+        # /locations/{id} GET per station per chunk, which multiplies real
+        # request volume ~25x and reliably burns through OpenAQ's rate limit.
+        self._sensor_cache: dict[str, dict[Pollutant, int]] = {}
 
     @property
     def source_name(self) -> SensorSourceName:
@@ -107,16 +115,20 @@ class OpenAQSource(SensorSource):
         return stations
 
     def _resolve_sensor_ids(self, location_id: str, pollutants: list[Pollutant]) -> dict[Pollutant, int]:
+        cached = self._sensor_cache.get(location_id)
+        if cached is not None:
+            return {p: sid for p, sid in cached.items() if p in pollutants}
+
         data = self._get(f"/locations/{location_id}", {})
         location = data.get("results", [data])[0] if "results" in data else data
-        wanted = set(pollutants)
         sensor_ids: dict[Pollutant, int] = {}
         for sensor in location.get("sensors", []):
             param_name = (sensor.get("parameter") or {}).get("name")
             pollutant = _PARAMETER_NAME_TO_POLLUTANT.get(param_name)
-            if pollutant in wanted:
+            if pollutant is not None:
                 sensor_ids[pollutant] = sensor["id"]
-        return sensor_ids
+        self._sensor_cache[location_id] = sensor_ids
+        return {p: sid for p, sid in sensor_ids.items() if p in pollutants}
 
     def fetch_readings(
         self,
