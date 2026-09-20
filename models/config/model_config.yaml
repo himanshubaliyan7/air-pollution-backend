@@ -5,17 +5,27 @@ horizons_hours: [24, 48, 72, 96, 120]
 quantiles: [0.1, 0.5, 0.9]
 
 lightgbm:
+  # num_threads is capped low deliberately: each individual model here is
+  # small (at most a few thousand rows, ~20 features - one station's lag/
+  # rolling/weather features for one pollutant/horizon), and LightGBM's
+  # per-call threading overhead dominates at this scale - more threads
+  # doesn't meaningfully speed up one fit. The real lever for training many
+  # stations is process-level parallelism across independent station/
+  # pollutant/horizon jobs (see scripts/train_all_parallel.py), which this
+  # low per-model thread count leaves CPU headroom for.
   quantile:
     n_estimators: 200
     num_leaves: 31
     learning_rate: 0.05
     min_child_samples: 10
+    num_threads: 2
   classifier:
     n_estimators: 200
     num_leaves: 31
     learning_rate: 0.05
     min_child_samples: 10
     is_unbalance: true
+    num_threads: 2
 
 training:
   # Trailing window pulled by retraining_dag; shorter default here so a
