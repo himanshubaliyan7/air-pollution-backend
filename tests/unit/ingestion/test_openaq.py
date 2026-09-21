@@ -266,3 +266,27 @@ def test_location_last_data_times_parses_datetime_last_and_missing():
     source = OpenAQSource(api_key="k", session=FakeSession(responses))
     out = source.location_last_data_times(bbox=(76.6, 28.2, 77.6, 29.0), country="IN")
     assert out == {"1": datetime(2026, 9, 20, 13, tzinfo=timezone.utc), "2": None, "3": None}
+
+
+def test_failed_location_lookup_is_skipped_not_fatal():
+    """Regression: _get() raising RuntimeError (retries exhausted) on a location
+    lookup crashed the whole fetch and lost readings already collected."""
+    class Flaky(FakeSession):
+        def get(self, url, params=None, timeout=None):
+            if url.endswith("/locations/bad"):
+                return FakeResponse({}, status_code=429)
+            return super().get(url, params=params, timeout=timeout)
+
+    responses = {
+        "/locations/good": FakeResponse({"results": [{"sensors": [{"id": 9, "parameter": {"name": "pm25"}}]}]}),
+        "/sensors/9/hours": FakeResponse(
+            {"meta": {"found": 1}, "results": [{"value": 12.0, "period": {"datetimeFrom": {"utc": "2026-09-20T13:30:00Z"}}}]}
+        ),
+    }
+    with patch("ingestion.sources.openaq.time.sleep"):
+        source = OpenAQSource(api_key="k", session=Flaky(responses))
+        readings = source.fetch_readings(
+            source_location_ids=["bad", "good"], pollutants=[Pollutant.PM25],
+            start=datetime(2026, 9, 20, 12, tzinfo=timezone.utc), end=datetime(2026, 9, 20, 14, tzinfo=timezone.utc),
+        )
+    assert [r.source_location_id for r in readings] == ["good"]

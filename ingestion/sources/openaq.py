@@ -170,7 +170,10 @@ class OpenAQSource(SensorSource):
         for location_id in source_location_ids:
             try:
                 sensor_ids = self._resolve_sensor_ids(location_id, pollutants)
-            except requests.HTTPError as exc:
+            except (requests.HTTPError, RuntimeError) as exc:
+                # RuntimeError = _get() exhausted its retries (rate limit / 5xx). One
+                # location failing must not discard every reading fetched so far;
+                # it is skipped and picked up by the next run's wide lookback window.
                 logger.warning("Could not resolve sensors for location %s: %s", location_id, exc)
                 continue
 
