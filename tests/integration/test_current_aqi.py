@@ -175,3 +175,20 @@ def test_matched_station_takes_its_real_city_and_state_from_the_feed(db_session)
     load_aqi_snapshots(db_session, [AqiRecord("x", "", "", 28.6469, 77.3158, "PM2.5", 1, 3, 2, HOUR)])
     db_session.expire_all()
     assert db_session.get(Station, "openaq:noida").city == "Noida"
+
+
+def test_exceedance_reports_forecast_time_and_currency(db_session):
+    from tests.integration.test_api import _seed_station_and_forecast  # noqa: PLC0415
+    from api.main import app
+    from db.models import Forecast
+
+    sid = _seed_station_and_forecast(db_session)
+    client = TestClient(app)
+    body = client.get(f"/api/v1/forecast/{sid}/exceedance").json()
+    assert body["is_current"] is True and body["forecast_made_at"] is not None
+
+    db_session.execute(update(Forecast).values(forecast_made_at=HOUR - timedelta(days=3)))
+    db_session.commit()
+    body = client.get(f"/api/v1/forecast/{sid}/exceedance").json()
+    assert body["is_current"] is False and body["days"] == [] and body["overall_recommendation"] == "no-data"
+    assert body["forecast_made_at"] is not None  # says how old the last run was

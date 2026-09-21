@@ -8,9 +8,11 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
+from orchestration.plugins.common.alerts import notify_task_failure
+
 from orchestration.plugins.common.tasks import refresh_station_activity
 
-default_args = {"owner": "air-pollution-prediction", "retries": 2, "retry_delay": timedelta(minutes=10)}
+default_args = {"owner": "air-pollution-prediction", "on_failure_callback": notify_task_failure, "retries": 2, "retry_delay": timedelta(minutes=10)}
 
 with DAG(
     dag_id="station_maintenance_dag",

@@ -3,9 +3,11 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
+from orchestration.plugins.common.alerts import notify_task_failure
+
 from orchestration.plugins.common.tasks import evaluate_recent_forecasts
 
-default_args = {"owner": "air-pollution-prediction", "retries": 1, "retry_delay": timedelta(minutes=10)}
+default_args = {"owner": "air-pollution-prediction", "on_failure_callback": notify_task_failure, "retries": 1, "retry_delay": timedelta(minutes=10)}
 
 MIN_RECALL = 0.4  # below this, maintainers (not schools) get paged - see drift_check
 

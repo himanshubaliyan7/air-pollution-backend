@@ -10,9 +10,11 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
+from orchestration.plugins.common.alerts import notify_task_failure
+
 from orchestration.plugins.common.tasks import ingest_current_aqi
 
-default_args = {"owner": "air-pollution-prediction", "retries": 2, "retry_delay": timedelta(minutes=5)}
+default_args = {"owner": "air-pollution-prediction", "on_failure_callback": notify_task_failure, "retries": 2, "retry_delay": timedelta(minutes=5)}
 
 with DAG(
     dag_id="current_aqi_dag",

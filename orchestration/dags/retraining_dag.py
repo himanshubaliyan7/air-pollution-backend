@@ -3,9 +3,11 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
+from orchestration.plugins.common.alerts import notify_task_failure
+
 from orchestration.plugins.common.tasks import retrain_all
 
-default_args = {"owner": "air-pollution-prediction", "retries": 1, "retry_delay": timedelta(minutes=30)}
+default_args = {"owner": "air-pollution-prediction", "on_failure_callback": notify_task_failure, "retries": 1, "retry_delay": timedelta(minutes=30)}
 
 with DAG(
     dag_id="retraining_dag",

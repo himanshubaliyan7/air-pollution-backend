@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     # Free personal key from data.gov.in (My Account). Empty = current-AQI ingestion is skipped.
     data_gov_in_api_key: str = ""
 
+    # Operator alerts (Telegram) and a dead-man's-switch ping URL (e.g. healthchecks.io).
+    # All optional: empty means the alert path is a silent no-op.
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    healthchecks_ping_url: str = ""
+
     cds_api_url: str = "https://cds.climate.copernicus.eu/api"
     cds_api_key: str = ""
 

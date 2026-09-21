@@ -37,6 +37,11 @@ class ExceedanceSummaryOut(BaseModel):
     pollutant: str
     # IANA zone in which each day's `date` is a calendar day (the station's region's zone).
     timezone: str | None = None
+    # When the forecast run behind `days` was generated (null if none ever existed), and whether
+    # it is fresh enough to act on. When is_current is false, `days` is empty and the
+    # recommendation is no-data.
+    forecast_made_at: datetime | None = None
+    is_current: bool = False
     days: list[ExceedanceDayOut]
     overall_recommendation: str  # "go" | "caution" | "no-go" | "no-data" ("no-data" may still carry partial `days`)
 

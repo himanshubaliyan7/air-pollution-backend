@@ -48,7 +48,8 @@ def get_exceedance_summary(
     # must never read as "go" - a school would treat silence as clearance.
     if not is_forecast_current(made_at):
         return ExceedanceSummaryOut(
-            station_id=station_id, pollutant=pollutant.value, timezone=tz_name, days=[], overall_recommendation="no-data"
+            station_id=station_id, pollutant=pollutant.value, timezone=tz_name, forecast_made_at=made_at,
+            is_current=False, days=[], overall_recommendation="no-data",
         )
 
     rows = db.execute(
@@ -100,5 +101,6 @@ def get_exceedance_summary(
         recommendation = "go"
 
     return ExceedanceSummaryOut(
-        station_id=station_id, pollutant=pollutant.value, timezone=tz_name, days=days, overall_recommendation=recommendation
+        station_id=station_id, pollutant=pollutant.value, timezone=tz_name, forecast_made_at=made_at,
+        is_current=True, days=days, overall_recommendation=recommendation,
     )
