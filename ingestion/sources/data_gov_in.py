@@ -33,6 +33,8 @@ from zoneinfo import ZoneInfo
 
 import requests
 
+from common.aqi import ATTRIBUTION  # noqa: F401  (re-exported for callers)
+
 logger = logging.getLogger(__name__)
 
 RESOURCE_URL = "https://api.data.gov.in/resource/3b01bcb8-0b14-4abf-b6f2-c1bfd384ba69"
@@ -42,10 +44,6 @@ DEFAULT_PAGE_LIMIT = 500
 MAX_PAGES = 100  # safety stop against a misbehaving `total`
 MAX_ATTEMPTS = 3
 
-ATTRIBUTION = (
-    "Source: Central Pollution Control Board (CPCB), Ministry of Environment, Forest and Climate Change, "
-    "Government of India, via data.gov.in, published under the Government Open Data License - India (GODL-India)."
-)
 
 
 @dataclass(frozen=True)

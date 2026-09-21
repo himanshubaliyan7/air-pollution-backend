@@ -7,10 +7,9 @@ from sqlalchemy.orm import Session
 from api.db import get_db
 from api.routers.forecasts import is_forecast_current
 from api.schemas.current_aqi import CurrentAqiOut, OverallAqiOut, PollutantAqiOut
-from common.aqi import category_for_sub_index, overall_aqi
+from common.aqi import ATTRIBUTION, category_for_sub_index, overall_aqi
 from common.regions import region_for_point
 from db.models import Station, StationAqiSnapshot
-from ingestion.sources.data_gov_in import ATTRIBUTION
 
 router = APIRouter(prefix="/stations", tags=["current-aqi"])
 
