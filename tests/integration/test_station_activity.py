@@ -149,6 +149,10 @@ def test_regions_endpoint_and_station_region_and_local_day(db_session):
     assert r["timezone"] == "Asia/Kolkata" and r["aqi_standard"] == "CPCB National AQI"
     assert [c["id"] for c in r["aqi_categories"]] == ["good", "satisfactory", "moderate", "poor", "very_poor", "severe"]
     assert r["health_threshold_category"] == "poor" and set(r["pollutants"]) == {"pm25", "no2"}
+    details = {d["id"]: d for d in r["pollutant_details"]}
+    assert set(details) == {"pm25", "no2"}
+    assert details["pm25"]["unit"] == "\u00b5g/m\u00b3" and details["pm25"]["health_threshold_concentration"] == 91.0
+    assert details["no2"]["health_threshold_concentration"] == 181.0 and details["pm25"]["threshold_averaging"] == "24h"
     assert client.get("/api/v1/regions/delhi-ncr").json()["id"] == "delhi-ncr"
     assert client.get("/api/v1/regions/nowhere").status_code == 404
 
@@ -165,3 +169,13 @@ def test_regions_endpoint_and_station_region_and_local_day(db_session):
     body = client.get(f"/api/v1/forecast/{sid}/exceedance", params={"pollutant": "pm25"}).json()
     assert body["timezone"] == "Asia/Kolkata"
     assert str(made.date() + timedelta(days=1)) in [d["date"] for d in body["days"]]
+
+
+def test_forecast_and_history_report_the_regions_time_zone(db_session):
+    from tests.integration.test_api import _seed_station_and_forecast  # noqa: PLC0415
+    from api.main import app
+
+    sid = _seed_station_and_forecast(db_session)
+    client = TestClient(app)
+    assert client.get(f"/api/v1/forecast/{sid}").json()["timezone"] == "Asia/Kolkata"
+    assert client.get(f"/api/v1/forecast/{sid}/history").json()["timezone"] == "Asia/Kolkata"

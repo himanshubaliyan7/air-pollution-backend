@@ -9,6 +9,7 @@ from api.schemas.forecasts import ForecastPointOut, ForecastSeriesOut, HistoryOu
 from api.schemas.model_health import ModelHealthOut
 from common.constants import Pollutant
 from common.freshness import is_input_fresh
+from common.regions import region_for_point
 from db.models import ExceedanceEvaluation, Forecast, RawSensorReading, Station
 
 router = APIRouter(tags=["forecasts"])
@@ -20,6 +21,11 @@ def _latest_forecast_made_at(db: Session, station_id: str, pollutant: Pollutant)
             Forecast.station_id == station_id, Forecast.pollutant == pollutant
         )
     ).scalar_one_or_none()
+
+
+def _station_timezone(station: Station) -> str | None:
+    region = region_for_point(station.lat, station.lon)
+    return region.timezone if region else None
 
 
 def is_forecast_current(made_at: datetime | None, now: datetime | None = None) -> bool:
@@ -36,17 +42,22 @@ def get_forecast(
     horizon_days: int | None = Query(None, ge=1, le=30),
     db: Session = Depends(get_db),
 ):
-    if db.get(Station, station_id) is None:
+    station = db.get(Station, station_id)
+    if station is None:
         raise HTTPException(status_code=404, detail="station not found")
+    tz_name = _station_timezone(station)
 
     made_at = _latest_forecast_made_at(db, station_id, pollutant)
     if made_at is None:
-        return ForecastSeriesOut(station_id=station_id, pollutant=pollutant.value, forecast_made_at=None, forecasts=[])
+        return ForecastSeriesOut(
+            station_id=station_id, pollutant=pollutant.value, forecast_made_at=None, timezone=tz_name, forecasts=[]
+        )
     if not is_forecast_current(made_at):
         # Report when the last forecast was made but do not serve its points:
         # a stale series charted next to a threshold line reads as current.
         return ForecastSeriesOut(
-            station_id=station_id, pollutant=pollutant.value, forecast_made_at=made_at, is_current=False, forecasts=[]
+            station_id=station_id, pollutant=pollutant.value, forecast_made_at=made_at, timezone=tz_name,
+            is_current=False, forecasts=[]
         )
 
     stmt = select(Forecast).where(
@@ -61,6 +72,7 @@ def get_forecast(
         station_id=station_id,
         pollutant=pollutant.value,
         forecast_made_at=made_at,
+        timezone=tz_name,
         is_current=True,
         forecasts=[
             ForecastPointOut(
@@ -84,7 +96,8 @@ def get_forecast_history(
     lookback_days: int = Query(14, ge=1, le=90),
     db: Session = Depends(get_db),
 ):
-    if db.get(Station, station_id) is None:
+    station = db.get(Station, station_id)
+    if station is None:
         raise HTTPException(status_code=404, detail="station not found")
 
     window_start = datetime.now(timezone.utc) - timedelta(days=lookback_days)
@@ -120,7 +133,9 @@ def get_forecast_history(
         HistoryPointOut(time=t, actual=actual_by_time.get(t), forecast_value=forecast_by_time.get(t))
         for t in all_times
     ]
-    return HistoryOut(station_id=station_id, pollutant=pollutant.value, points=points)
+    return HistoryOut(
+        station_id=station_id, pollutant=pollutant.value, timezone=_station_timezone(station), points=points
+    )
 
 
 @router.get("/model-health", response_model=list[ModelHealthOut])

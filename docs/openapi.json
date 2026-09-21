@@ -829,6 +829,17 @@
             ],
             "title": "Forecast Made At"
           },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          },
           "is_current": {
             "type": "boolean",
             "title": "Is Current",
@@ -873,6 +884,17 @@
           "pollutant": {
             "type": "string",
             "title": "Pollutant"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
           },
           "points": {
             "items": {
@@ -1109,6 +1131,48 @@
         ],
         "title": "PollutantAqiOut"
       },
+      "PollutantInfoOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit"
+          },
+          "health_threshold_concentration": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Health Threshold Concentration"
+          },
+          "threshold_averaging": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold Averaging"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "unit",
+          "health_threshold_concentration",
+          "threshold_averaging"
+        ],
+        "title": "PollutantInfoOut"
+      },
       "RegionOut": {
         "properties": {
           "id": {
@@ -1145,6 +1209,13 @@
             "type": "array",
             "title": "Pollutants"
           },
+          "pollutant_details": {
+            "items": {
+              "$ref": "#/components/schemas/PollutantInfoOut"
+            },
+            "type": "array",
+            "title": "Pollutant Details"
+          },
           "aqi_categories": {
             "items": {
               "$ref": "#/components/schemas/AqiCategoryOut"
@@ -1166,6 +1237,7 @@
           "bbox",
           "aqi_standard",
           "pollutants",
+          "pollutant_details",
           "aqi_categories",
           "health_threshold_category"
         ],

@@ -17,6 +17,8 @@ class ForecastSeriesOut(BaseModel):
     station_id: str
     pollutant: str
     forecast_made_at: datetime | None
+    # IANA zone of the station's region; format target_time / forecast_made_at in it.
+    timezone: str | None = None
     # False when a forecast exists but is too old to act on; `forecasts` is then empty.
     is_current: bool = False
     forecasts: list[ForecastPointOut]
@@ -48,4 +50,6 @@ class HistoryPointOut(BaseModel):
 class HistoryOut(BaseModel):
     station_id: str
     pollutant: str
+    # IANA zone of the station's region; format `time` in it.
+    timezone: str | None = None
     points: list[HistoryPointOut]
