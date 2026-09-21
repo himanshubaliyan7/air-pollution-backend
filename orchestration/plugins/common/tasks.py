@@ -189,12 +189,19 @@ def ingestion_data_quality_check(sensor_rows: int, weather_rows: int) -> None:
         raise RuntimeError("ingestion_data_quality_check: zero rows ingested with active stations configured")
 
 
-def refresh_station_activity(max_dark_days: int = 30) -> dict[str, int]:
+# A station that has reported nothing for this long is hidden from the station list and
+# skipped by ingestion. 7 days, not 30: stale duplicate entries of a live station (e.g.
+# "Anand Vihar, Delhi" next to "Anand Vihar, New Delhi", found 2026-09-22) otherwise
+# clutter the list for weeks. A station that resumes is reactivated on the next daily run.
+MAX_DARK_DAYS = 7
+
+
+def refresh_station_activity(max_dark_days: int = MAX_DARK_DAYS) -> dict[str, int]:
     """Marks stations inactive when OpenAQ says they have not reported for
-    `max_dark_days` (or ever), and reactivates any that have resumed. Dark
-    stations otherwise cost several API calls per hourly ingestion run for
-    nothing (39 of 124 Delhi NCR locations had been dark for 30+ days,
-    verified 2026-09-20)."""
+    `max_dark_days` (or ever) and they have no recent CPCB snapshot, and
+    reactivates any that have resumed. Dark stations otherwise cost several API
+    calls per hourly ingestion run for nothing (39 of 124 Delhi NCR locations had
+    been dark for 30+ days, verified 2026-09-20)."""
     from ingestion.config import DELHI_NCR_BBOX, DELHI_NCR_COUNTRY_ISO
 
     session = get_session()

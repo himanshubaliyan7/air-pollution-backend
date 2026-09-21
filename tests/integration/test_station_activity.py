@@ -179,3 +179,19 @@ def test_forecast_and_history_report_the_regions_time_zone(db_session):
     client = TestClient(app)
     assert client.get(f"/api/v1/forecast/{sid}").json()["timezone"] == "Asia/Kolkata"
     assert client.get(f"/api/v1/forecast/{sid}/history").json()["timezone"] == "Asia/Kolkata"
+
+
+def test_default_dark_threshold_is_seven_days(db_session, monkeypatch):
+    """Stale duplicate entries of a live station clutter the station list, so a station
+    silent for more than 7 days is hidden (and returns when it resumes)."""
+    from orchestration.plugins.common import tasks
+
+    assert tasks.MAX_DARK_DAYS == 7
+    db_session.add_all([_station("openaq:six"), _station("openaq:eight")])
+    db_session.commit()
+    _patch_source(monkeypatch, {"openaq:six": NOW - timedelta(days=6), "openaq:eight": NOW - timedelta(days=8)})
+
+    assert tasks.refresh_station_activity() == {"deactivated": 1, "reactivated": 0}
+    db_session.expire_all()
+    active = {s.station_id: s.is_active for s in db_session.query(Station).all()}
+    assert active == {"openaq:six": True, "openaq:eight": False}
