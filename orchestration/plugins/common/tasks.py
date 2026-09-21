@@ -44,7 +44,15 @@ def _active_stations(session) -> list[Station]:
 
 # ---------------------------------------------------------------- ingestion
 
-def ingest_sensor_readings(lookback_hours: int = 6) -> int:
+# Wide on purpose: the host or scheduler can be down for hours (a 13h gap was
+# observed 2026-09-20/21 - no runs, and a 6h window then left those hours
+# missing for good, which shows up as NaN lag features). A 72h window costs no
+# extra API requests (still one per sensor, ~72 hourly rows each) and the loader
+# is idempotent, so any outage up to 72h heals itself on the next run.
+SENSOR_LOOKBACK_HOURS = 72
+
+
+def ingest_sensor_readings(lookback_hours: int = SENSOR_LOOKBACK_HOURS) -> int:
     session = get_session()
     try:
         settings = get_settings()
