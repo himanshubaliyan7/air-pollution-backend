@@ -10,6 +10,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     DATABASE_URL: ${DATABASE_URL}
     OPENAQ_API_KEY: ${OPENAQ_API_KEY}
+    DATA_GOV_IN_API_KEY: ${DATA_GOV_IN_API_KEY:-}
     CDS_API_URL: ${CDS_API_URL}
     CDS_API_KEY: ${CDS_API_KEY}
     SMTP_HOST: ${SMTP_HOST}

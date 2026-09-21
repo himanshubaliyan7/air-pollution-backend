@@ -8,7 +8,7 @@ from api.db import get_db
 from api.routers.forecasts import is_forecast_current
 from api.schemas.stations import StationDetailOut, StationOut
 from common.regions import region_for_point
-from db.models import Forecast, RawSensorReading, Station
+from db.models import Forecast, RawSensorReading, Station, StationAqiSnapshot
 
 router = APIRouter(prefix="/stations", tags=["stations"])
 
@@ -41,6 +41,13 @@ def list_stations(region_id: str | None = Query(None), db: Session = Depends(get
             .group_by(Forecast.station_id)
         ).all()
     )
+    latest_snapshot = dict(
+        db.execute(
+            select(StationAqiSnapshot.station_id, func.max(StationAqiSnapshot.source_updated_at))
+            .where(StationAqiSnapshot.source_updated_at >= now - timedelta(days=1))
+            .group_by(StationAqiSnapshot.station_id)
+        ).all()
+    )
     out = [
         StationOut(
             station_id=s.station_id,
@@ -52,12 +59,13 @@ def list_stations(region_id: str | None = Query(None), db: Session = Depends(get
             region_id=_region_id(s),
             latest_observed_at=latest_reading.get(s.station_id),
             has_current_forecast=is_forecast_current(latest_forecast.get(s.station_id)),
+            has_current_aqi=is_forecast_current(latest_snapshot.get(s.station_id)),
         )
         for s in stations
     ]
     if region_id is not None:
         out = [s for s in out if s.region_id == region_id]
-    out.sort(key=lambda s: (not s.has_current_forecast, s.name))
+    out.sort(key=lambda s: (not s.has_current_forecast, not s.has_current_aqi, s.name))
     return out
 
 

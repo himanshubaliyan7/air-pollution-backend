@@ -16,6 +16,8 @@ class StationOut(BaseModel):
     # act on exists - the upstream feed lags badly, so most stations have none.
     latest_observed_at: datetime | None = None
     has_current_forecast: bool = False
+    # A current CPCB AQI reading exists (see GET /stations/{id}/current-aqi).
+    has_current_aqi: bool = False
 
     model_config = {"from_attributes": True}
 

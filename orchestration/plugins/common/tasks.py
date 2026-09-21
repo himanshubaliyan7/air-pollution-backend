@@ -21,13 +21,15 @@ from common.constants import (
     Pollutant,
     SensorSourceName,
 )
-from db.models import Forecast, ModelRun, RawSensorReading, Station
+from db.models import Forecast, ModelRun, RawSensorReading, Station, StationAqiSnapshot
 from db.session import get_session
 from features.build_features import build_feature_frame
 from features.feature_store import write_features
 from ingestion.config import ACTIVE_SOURCE, SENSOR_SOURCE_REGISTRY, make_station_id
+from ingestion.loaders.aqi_snapshot_loader import load_aqi_snapshots
 from ingestion.loaders.sensor_loader import load_sensor_readings
 from ingestion.loaders.weather_loader import load_weather_readings
+from ingestion.sources.data_gov_in import DataGovInClient
 from ingestion.weather.era5_client import ERA5Client
 from ingestion.weather.grid import DELHI_NCR_AREA
 from ingestion.weather.open_meteo_client import OpenMeteoClient
@@ -73,6 +75,25 @@ def ingest_sensor_readings(lookback_hours: int = SENSOR_LOOKBACK_HOURS) -> int:
             end=end,
         )
         return load_sensor_readings(session, readings, ACTIVE_SOURCE)
+    finally:
+        session.close()
+
+
+def ingest_current_aqi() -> dict:
+    """Hourly CPCB AQI sub-index snapshot from data.gov.in (current conditions).
+    Skipped, not failed, while no API key is configured."""
+    api_key = get_settings().data_gov_in_api_key
+    if not api_key:
+        logger.info("DATA_GOV_IN_API_KEY not set; skipping current-AQI ingestion")
+        return {"skipped": 1}
+    session = get_session()
+    try:
+        records = DataGovInClient(api_key=api_key).fetch()
+        if not records:
+            raise RuntimeError("data.gov.in returned no usable records")
+        result = load_aqi_snapshots(session, records)
+        logger.info("Current AQI snapshots: %s (from %d feed rows)", result, len(records))
+        return result
     finally:
         session.close()
 
@@ -186,12 +207,21 @@ def refresh_station_activity(max_dark_days: int = 30) -> dict[str, int]:
             raise RuntimeError("OpenAQ returned no locations; refusing to change station activity")
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=max_dark_days)
+        # A station OpenAQ lists as dark can still have a current CPCB reading from
+        # data.gov.in; such a station is worth keeping active.
+        has_recent_snapshot = set(
+            session.execute(
+                select(StationAqiSnapshot.station_id)
+                .where(StationAqiSnapshot.source_updated_at >= datetime.now(timezone.utc) - timedelta(days=3))
+                .distinct()
+            ).scalars()
+        )
         deactivated = reactivated = 0
         for station in session.execute(select(Station)).scalars().all():
             if station.source_location_id not in last_seen:
                 continue  # unknown to OpenAQ this time; leave as is
             newest = last_seen[station.source_location_id]
-            should_be_active = newest is not None and newest >= cutoff
+            should_be_active = (newest is not None and newest >= cutoff) or station.station_id in has_recent_snapshot
             if station.is_active and not should_be_active:
                 station.is_active = False
                 deactivated += 1

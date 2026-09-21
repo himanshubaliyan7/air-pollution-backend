@@ -1,0 +1,147 @@
+"""Current-conditions AQI from data.gov.in: matching to our stations, idempotent
+storage, the activity rule, and the API (including that an old reading is never
+served as current)."""
+
+from datetime import datetime, timedelta, timezone
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import update
+
+from common.constants import SensorSourceName
+from db.models import Station, StationAqiSnapshot
+from ingestion.loaders.aqi_snapshot_loader import load_aqi_snapshots
+from ingestion.sources.data_gov_in import ATTRIBUTION, AqiRecord
+
+NOW = datetime.now(timezone.utc)
+HOUR = NOW.replace(minute=0, second=0, microsecond=0)
+
+
+def _station(sid, lat=28.6469, lon=77.3158, active=True):
+    return Station(
+        station_id=sid, name=sid, lat=lat, lon=lon, city="Delhi", state="Delhi",
+        source=SensorSourceName.OPENAQ, source_location_id=sid, is_active=active, created_at=NOW,
+    )
+
+
+def _rec(pollutant, avg, lat=28.6469, lon=77.3158, at=HOUR, name="Anand Vihar"):
+    return AqiRecord(name, "Delhi", "Delhi", lat, lon, pollutant, avg / 2, avg * 2, avg, at)
+
+
+def test_matches_by_coordinates_stores_idempotently_and_counts_unmatched(db_session):
+    db_session.add(_station("openaq:near"))
+    db_session.commit()
+    records = [_rec("PM2.5", 166), _rec("NO2", 27), _rec("PM10", 140, lat=28.7, lon=77.4, name="Far Away")]
+
+    assert load_aqi_snapshots(db_session, records) == {"stored": 2, "matched_stations": 1, "unmatched_stations": 1}
+    assert load_aqi_snapshots(db_session, records)["stored"] == 2  # re-run: same rows, no duplicates
+    assert db_session.query(StationAqiSnapshot).count() == 2
+
+    load_aqi_snapshots(db_session, [_rec("PM2.5", 170)])  # a revised value for the same hour replaces it
+    db_session.expire_all()
+    row = db_session.query(StationAqiSnapshot).filter_by(pollutant_id="PM2.5").one()
+    assert row.sub_index_avg == 170 and row.station_id == "openaq:near"
+
+
+def test_matches_inactive_stations_too(db_session):
+    db_session.add(_station("openaq:dark", active=False))
+    db_session.commit()
+    assert load_aqi_snapshots(db_session, [_rec("PM2.5", 100)])["matched_stations"] == 1
+
+
+def test_station_dark_on_openaq_is_kept_active_by_a_recent_snapshot(db_session, monkeypatch):
+    from orchestration.plugins.common import tasks
+
+    db_session.add_all([_station("openaq:has-aqi", lat=28.60, lon=77.20), _station("openaq:truly-dead", lat=28.90, lon=77.10)])
+    db_session.commit()
+    load_aqi_snapshots(db_session, [_rec("PM2.5", 100, lat=28.60, lon=77.20)])
+
+    class Source:
+        def __call__(self, api_key):
+            return self
+
+        def location_last_data_times(self, **_):
+            return {"openaq:has-aqi": NOW - timedelta(days=90), "openaq:truly-dead": NOW - timedelta(days=90)}
+
+    monkeypatch.setitem(tasks.SENSOR_SOURCE_REGISTRY, tasks.ACTIVE_SOURCE, Source())
+    tasks.refresh_station_activity()
+    db_session.expire_all()
+    active = {s.station_id: s.is_active for s in db_session.query(Station).all()}
+    assert active == {"openaq:has-aqi": True, "openaq:truly-dead": False}
+
+
+def test_ingest_is_skipped_without_a_key(monkeypatch):
+    from common.config import get_settings
+    from orchestration.plugins.common import tasks
+
+    monkeypatch.setattr(get_settings(), "data_gov_in_api_key", "")
+    assert tasks.ingest_current_aqi() == {"skipped": 1}
+
+
+def test_ingest_fails_loudly_when_the_feed_returns_nothing(monkeypatch):
+    from common.config import get_settings
+    from orchestration.plugins.common import tasks
+
+    monkeypatch.setattr(get_settings(), "data_gov_in_api_key", "k")
+    monkeypatch.setattr(tasks.DataGovInClient, "fetch", lambda self, filters=None: [])
+    with pytest.raises(RuntimeError):
+        tasks.ingest_current_aqi()
+
+
+def test_api_current_aqi_overall_categories_and_attribution(db_session):
+    from api.main import app
+
+    db_session.add(_station("openaq:api"))
+    db_session.commit()
+    load_aqi_snapshots(db_session, [_rec("PM2.5", 166), _rec("PM10", 140), _rec("NO2", 27), _rec("CO", 80)])
+
+    client = TestClient(app)
+    body = client.get("/api/v1/stations/openaq:api/current-aqi").json()
+    assert body["is_current"] is True and body["as_of"] is not None
+    assert body["overall"] == {"aqi": 166, "category": "moderate", "driver": "PM2.5"}
+    assert {p["pollutant_id"]: p["category"] for p in body["pollutants"]} == {
+        "CO": "satisfactory", "NO2": "good", "PM10": "moderate", "PM2.5": "moderate"}
+    assert body["aqi_standard"] == "CPCB National AQI" and body["timezone"] == "Asia/Kolkata"
+    assert body["attribution"] == ATTRIBUTION
+
+    row = next(s for s in client.get("/api/v1/stations").json() if s["station_id"] == "openaq:api")
+    assert row["has_current_aqi"] is True
+
+
+def test_api_overall_is_null_when_cpcb_minimum_is_not_met(db_session):
+    from api.main import app
+
+    db_session.add(_station("openaq:two"))
+    db_session.commit()
+    load_aqi_snapshots(db_session, [_rec("PM2.5", 250), _rec("NO2", 27)])
+    body = TestClient(app).get("/api/v1/stations/openaq:two/current-aqi").json()
+    assert body["is_current"] is True and body["overall"] is None and len(body["pollutants"]) == 2
+
+
+def test_api_old_reading_is_reported_as_not_current_and_never_served(db_session):
+    """Same rule as forecasts: a stale reading must not read as current conditions."""
+    from api.main import app
+
+    db_session.add(_station("openaq:old"))
+    db_session.commit()
+    load_aqi_snapshots(db_session, [_rec("PM2.5", 166), _rec("PM10", 140), _rec("NO2", 27)])
+    db_session.execute(update(StationAqiSnapshot).values(source_updated_at=HOUR - timedelta(hours=20)))
+    db_session.commit()
+
+    client = TestClient(app)
+    body = client.get("/api/v1/stations/openaq:old/current-aqi").json()
+    assert body["is_current"] is False and body["overall"] is None and body["pollutants"] == []
+    assert body["as_of"] is not None  # says how old the last reading was
+    row = next(s for s in client.get("/api/v1/stations").json() if s["station_id"] == "openaq:old")
+    assert row["has_current_aqi"] is False
+
+
+def test_api_station_without_readings_and_unknown_station(db_session):
+    from api.main import app
+
+    db_session.add(_station("openaq:none"))
+    db_session.commit()
+    client = TestClient(app)
+    body = client.get("/api/v1/stations/openaq:none/current-aqi").json()
+    assert body["is_current"] is False and body["as_of"] is None and body["overall"] is None
+    assert client.get("/api/v1/stations/nope/current-aqi").status_code == 404

@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     dashboard_url: str = "http://localhost:8501"
 
     openaq_api_key: str = ""
+    # Free personal key from data.gov.in (My Account). Empty = current-AQI ingestion is skipped.
+    data_gov_in_api_key: str = ""
 
     cds_api_url: str = "https://cds.climate.copernicus.eu/api"
     cds_api_key: str = ""

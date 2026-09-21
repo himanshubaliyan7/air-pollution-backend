@@ -72,6 +72,49 @@
         }
       }
     },
+    "/api/v1/stations/{station_id}/current-aqi": {
+      "get": {
+        "tags": [
+          "current-aqi"
+        ],
+        "summary": "Get Current Aqi",
+        "description": "Official CPCB AQI right now (no forecast involved), when data.gov.in has\na recent reading for this station.",
+        "operationId": "get_current_aqi_api_v1_stations__station_id__current_aqi_get",
+        "parameters": [
+          {
+            "name": "station_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Station Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentAqiOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/stations": {
       "get": {
         "tags": [
@@ -554,6 +597,85 @@
         ],
         "title": "AqiCategoryOut"
       },
+      "CurrentAqiOut": {
+        "properties": {
+          "station_id": {
+            "type": "string",
+            "title": "Station Id"
+          },
+          "as_of": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of"
+          },
+          "is_current": {
+            "type": "boolean",
+            "title": "Is Current"
+          },
+          "aqi_standard": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aqi Standard"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          },
+          "overall": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OverallAqiOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pollutants": {
+            "items": {
+              "$ref": "#/components/schemas/PollutantAqiOut"
+            },
+            "type": "array",
+            "title": "Pollutants"
+          },
+          "attribution": {
+            "type": "string",
+            "title": "Attribution"
+          }
+        },
+        "type": "object",
+        "required": [
+          "station_id",
+          "as_of",
+          "is_current",
+          "aqi_standard",
+          "timezone",
+          "overall",
+          "pollutants",
+          "attribution"
+        ],
+        "title": "CurrentAqiOut"
+      },
       "ExceedanceDayOut": {
         "properties": {
           "date": {
@@ -884,6 +1006,29 @@
         ],
         "title": "ModelHealthOut"
       },
+      "OverallAqiOut": {
+        "properties": {
+          "aqi": {
+            "type": "integer",
+            "title": "Aqi"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category"
+          },
+          "driver": {
+            "type": "string",
+            "title": "Driver"
+          }
+        },
+        "type": "object",
+        "required": [
+          "aqi",
+          "category",
+          "driver"
+        ],
+        "title": "OverallAqiOut"
+      },
       "Pollutant": {
         "type": "string",
         "enum": [
@@ -891,6 +1036,67 @@
           "no2"
         ],
         "title": "Pollutant"
+      },
+      "PollutantAqiOut": {
+        "properties": {
+          "pollutant_id": {
+            "type": "string",
+            "title": "Pollutant Id"
+          },
+          "sub_index_avg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sub Index Avg"
+          },
+          "sub_index_min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sub Index Min"
+          },
+          "sub_index_max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sub Index Max"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pollutant_id",
+          "sub_index_avg",
+          "sub_index_min",
+          "sub_index_max",
+          "category"
+        ],
+        "title": "PollutantAqiOut"
       },
       "RegionOut": {
         "properties": {
@@ -1007,6 +1213,11 @@
             "type": "boolean",
             "title": "Has Current Forecast",
             "default": false
+          },
+          "has_current_aqi": {
+            "type": "boolean",
+            "title": "Has Current Aqi",
+            "default": false
           }
         },
         "type": "object",
@@ -1072,6 +1283,11 @@
           "has_current_forecast": {
             "type": "boolean",
             "title": "Has Current Forecast",
+            "default": false
+          },
+          "has_current_aqi": {
+            "type": "boolean",
+            "title": "Has Current Aqi",
             "default": false
           }
         },

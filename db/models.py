@@ -239,6 +239,24 @@ class AlertLog(Base):
     )
 
 
+class StationAqiSnapshot(Base):
+    """One hourly CPCB AQI SUB-INDEX reading per station and pollutant, from the
+    data.gov.in real-time feed (see ingestion/sources/data_gov_in.py). These are
+    sub-indices over a rolling window, NOT hourly ug/m3 concentrations, so they
+    live apart from raw_sensor_readings and never feed the forecasting models.
+    Every hourly snapshot is kept: the feed has no history of its own."""
+
+    __tablename__ = "station_aqi_snapshots"
+
+    station_id = Column(String, ForeignKey("stations.station_id"), primary_key=True)
+    pollutant_id = Column(String, primary_key=True)  # as published: PM2.5, PM10, NO2, SO2, CO, OZONE, NH3
+    source_updated_at = Column(DateTime(timezone=True), primary_key=True)
+    sub_index_min = Column(Float, nullable=True)
+    sub_index_max = Column(Float, nullable=True)
+    sub_index_avg = Column(Float, nullable=True)
+    fetched_at = Column(DateTime(timezone=True), nullable=False)
+
+
 HYPERTABLE_SPECS = [
     # (table_name, time_column, chunk_time_interval)
     ("raw_sensor_readings", "observed_at", "7 days"),
