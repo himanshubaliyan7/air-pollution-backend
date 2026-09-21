@@ -6,7 +6,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR:-LocalExecutor}
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW_DATABASE_URL}
     AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-}
-    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY:-change-me}
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY:?set AIRFLOW__WEBSERVER__SECRET_KEY in docker/.env}
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     DATABASE_URL: ${DATABASE_URL}
     OPENAQ_API_KEY: ${OPENAQ_API_KEY}
@@ -33,8 +33,8 @@ services:
   postgres:
     image: timescale/timescaledb:2.14.2-pg15
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in docker/.env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in docker/.env}
       POSTGRES_DB: ${POSTGRES_DB:-airpollution}
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -66,7 +66,7 @@ services:
         airflow db migrate
         airflow users create \
           --username "${AIRFLOW_ADMIN_USER:-admin}" \
-          --password "${AIRFLOW_ADMIN_PASSWORD:-admin}" \
+          --password "${AIRFLOW_ADMIN_PASSWORD:?set AIRFLOW_ADMIN_PASSWORD in docker/.env}" \
           --firstname Admin --lastname User \
           --role Admin --email "${AIRFLOW_ADMIN_EMAIL:-admin@example.com}" || true
     depends_on:

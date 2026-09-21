@@ -23,7 +23,9 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = "postgresql+psycopg2://postgres:postgres@localhost:5432/airpollution"
+    # No default on purpose: a credential-shaped default in code ends up in git history and in
+    # secret scanners. Set DATABASE_URL in the environment (docker/.env, or TEST_DATABASE_URL for tests).
+    database_url: str = ""
 
     # Origins a browser frontend may call the API from, comma-separated, or "*".
     # The API is unauthenticated and sets no cookies, so "*" exposes nothing
