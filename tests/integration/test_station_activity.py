@@ -187,9 +187,9 @@ def test_default_dark_threshold_is_seven_days(db_session, monkeypatch):
     from orchestration.plugins.common import tasks
 
     assert tasks.MAX_DARK_DAYS == 7
-    db_session.add_all([_station("openaq:six"), _station("openaq:eight")])
+    db_session.add_all([_station("six"), _station("eight")])  # the helper prefixes ids with "openaq:"
     db_session.commit()
-    _patch_source(monkeypatch, {"openaq:six": NOW - timedelta(days=6), "openaq:eight": NOW - timedelta(days=8)})
+    _patch_source(monkeypatch, {"six": NOW - timedelta(days=6), "eight": NOW - timedelta(days=8)})
 
     assert tasks.refresh_station_activity() == {"deactivated": 1, "reactivated": 0}
     db_session.expire_all()
