@@ -36,6 +36,14 @@ INITIAL_BACKOFF_SECONDS = 2.0
 _PARAMETER_NAME_TO_POLLUTANT = {p.value: p for p in Pollutant}
 
 
+class OpenAQAuthError(Exception):
+    """OpenAQ rejected the API key (401/403). Deliberately NOT a RuntimeError/HTTPError:
+    fetch_readings skips a station whose lookup fails, but a rejected key fails every
+    station identically, so skipping them would let ingestion "succeed" while writing
+    nothing (seen 2026-09-21: 85 lookups returned 401 for 6+ hours and every hourly run
+    still reported success). It must fail the task so the outage is visible."""
+
+
 class OpenAQSource(SensorSource):
     def __init__(self, api_key: str, session: requests.Session | None = None):
         if not api_key:
@@ -74,6 +82,10 @@ class OpenAQSource(SensorSource):
             self._wait_for_quota()
             resp = self._session.get(url, params=params, timeout=30)
             self._record_quota(resp)
+            if resp.status_code in (401, 403):
+                raise OpenAQAuthError(
+                    f"OpenAQ rejected the API key (HTTP {resp.status_code}) on {path}; check OPENAQ_API_KEY"
+                )
             if resp.status_code == 429:
                 retry_after = float(resp.headers.get("Retry-After") or resp.headers.get("X-Ratelimit-Reset") or backoff)
                 logger.warning(

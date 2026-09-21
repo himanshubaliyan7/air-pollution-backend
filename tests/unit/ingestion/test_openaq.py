@@ -337,3 +337,20 @@ def test_429_backoff_uses_the_reported_reset_when_no_retry_after():
         source = OpenAQSource(api_key="k", session=Seq([Limited(), FakeResponse({"results": []})]))
         source._get("/x", {})
     assert sleeps == [7.0]
+
+
+def test_rejected_api_key_fails_loudly_instead_of_being_skipped_per_station():
+    """Regression: a revoked key made every location lookup return 401; each was skipped
+    like any transient failure, so ingestion wrote nothing yet reported success."""
+    import pytest
+
+    from ingestion.sources.openaq import OpenAQAuthError
+
+    session = FakeSession({"/locations/1": FakeResponse({"detail": "Invalid credentials"}, status_code=401)})
+    source = OpenAQSource(api_key="k", session=session)
+    with pytest.raises(OpenAQAuthError):
+        source.fetch_readings(
+            source_location_ids=["1", "2"], pollutants=[Pollutant.PM25],
+            start=datetime(2026, 9, 20, 12, tzinfo=timezone.utc), end=datetime(2026, 9, 20, 14, tzinfo=timezone.utc),
+        )
+    assert len(session.calls) == 1  # no retries, and it did not carry on to the next station
