@@ -28,6 +28,9 @@ class CurrentAqiOut(BaseModel):
     timezone: str | None
     # null unless CPCB's rule is met (at least 3 pollutants, one of them PM2.5 or PM10).
     overall: OverallAqiOut | None
+    # True when the overall category is at or worse than the region's health-threshold category
+    # (outdoor practice not recommended right now); null when there is no overall AQI.
+    at_or_above_health_threshold: bool | None = None
     # CPCB AQI SUB-INDICES over a rolling window, not ug/m3 concentrations.
     pollutants: list[PollutantAqiOut]
     attribution: str  # must be shown wherever this data is displayed

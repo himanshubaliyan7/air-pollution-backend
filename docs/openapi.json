@@ -651,6 +651,17 @@
               }
             ]
           },
+          "at_or_above_health_threshold": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At Or Above Health Threshold"
+          },
           "pollutants": {
             "items": {
               "$ref": "#/components/schemas/PollutantAqiOut"

@@ -99,6 +99,7 @@ def test_api_current_aqi_overall_categories_and_attribution(db_session):
     body = client.get("/api/v1/stations/openaq:api/current-aqi").json()
     assert body["is_current"] is True and body["as_of"] is not None
     assert body["overall"] == {"aqi": 166, "category": "moderate", "driver": "PM2.5"}
+    assert body["at_or_above_health_threshold"] is False
     assert {p["pollutant_id"]: p["category"] for p in body["pollutants"]} == {
         "CO": "satisfactory", "NO2": "good", "PM10": "moderate", "PM2.5": "moderate"}
     assert body["aqi_standard"] == "CPCB National AQI" and body["timezone"] == "Asia/Kolkata"
@@ -116,6 +117,7 @@ def test_api_overall_is_null_when_cpcb_minimum_is_not_met(db_session):
     load_aqi_snapshots(db_session, [_rec("PM2.5", 250), _rec("NO2", 27)])
     body = TestClient(app).get("/api/v1/stations/openaq:two/current-aqi").json()
     assert body["is_current"] is True and body["overall"] is None and len(body["pollutants"]) == 2
+    assert body["at_or_above_health_threshold"] is None  # no overall AQI, so no verdict
 
 
 def test_api_old_reading_is_reported_as_not_current_and_never_served(db_session):
@@ -145,3 +147,13 @@ def test_api_station_without_readings_and_unknown_station(db_session):
     body = client.get("/api/v1/stations/openaq:none/current-aqi").json()
     assert body["is_current"] is False and body["as_of"] is None and body["overall"] is None
     assert client.get("/api/v1/stations/nope/current-aqi").status_code == 404
+
+
+def test_api_flags_a_reading_at_or_above_the_health_threshold(db_session):
+    from api.main import app
+
+    db_session.add(_station("openaq:bad"))
+    db_session.commit()
+    load_aqi_snapshots(db_session, [_rec("PM2.5", 250), _rec("PM10", 140), _rec("NO2", 27)])
+    body = TestClient(app).get("/api/v1/stations/openaq:bad/current-aqi").json()
+    assert body["overall"]["category"] == "poor" and body["at_or_above_health_threshold"] is True

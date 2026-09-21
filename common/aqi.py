@@ -26,6 +26,14 @@ def category_for_sub_index(thresholds: dict, value: float) -> str:
     return bands[-1]["category"]
 
 
+def at_or_above_health_threshold(thresholds: dict, category: str) -> bool:
+    """True when `category` is at or worse than the region's declared
+    health-threshold category (the level at which outdoor practice is not
+    recommended). Decided here so no client has to know the category order."""
+    order = [b["category"] for b in next(iter(thresholds["pollutants"].values()))["breakpoints"]]
+    return order.index(category) >= order.index(thresholds["health_threshold_category"])
+
+
 def overall_aqi(sub_indices: dict[str, float]) -> tuple[int, str] | None:
     """(worst sub-index rounded, the pollutant driving it), or None when CPCB's
     minimum-pollutants rule is not met."""

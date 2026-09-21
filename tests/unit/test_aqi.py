@@ -1,4 +1,4 @@
-from common.aqi import category_for_sub_index, overall_aqi
+from common.aqi import at_or_above_health_threshold, category_for_sub_index, overall_aqi
 from common.regions import get_region
 
 
@@ -20,3 +20,10 @@ def test_overall_requires_three_pollutants_including_a_particulate():
     assert overall_aqi({"PM2.5": 166.0, "NO2": 27.0}) is None
     assert overall_aqi({"NO2": 27.0, "SO2": 12.0, "CO": 80.0}) is None
     assert overall_aqi({"PM2.5": 166.0, "NO2": None, "SO2": None}) is None  # NA does not count as reported
+
+
+def test_health_threshold_flag_uses_the_regions_declared_category():
+    thresholds = get_region("delhi-ncr").thresholds()  # health_threshold_category: poor
+    flags = {c: at_or_above_health_threshold(thresholds, c) for c in
+             ["good", "satisfactory", "moderate", "poor", "very_poor", "severe"]}
+    assert flags == {"good": False, "satisfactory": False, "moderate": False, "poor": True, "very_poor": True, "severe": True}

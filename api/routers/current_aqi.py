@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from api.db import get_db
 from api.routers.forecasts import is_forecast_current
 from api.schemas.current_aqi import CurrentAqiOut, OverallAqiOut, PollutantAqiOut
-from common.aqi import ATTRIBUTION, category_for_sub_index, overall_aqi
+from common.aqi import ATTRIBUTION, at_or_above_health_threshold, category_for_sub_index, overall_aqi
 from common.regions import region_for_point
 from db.models import Station, StationAqiSnapshot
 
@@ -65,10 +65,15 @@ def get_current_aqi(station_id: str, db: Session = Depends(get_db)):
     ]
 
     overall = None
+    over_threshold = None
     if thresholds:
         result = overall_aqi({pid: r.sub_index_avg for pid, r in latest_by_pollutant.items()})
         if result is not None:
             aqi, driver = result
             overall = OverallAqiOut(aqi=aqi, category=category_for_sub_index(thresholds, aqi), driver=driver)
+            over_threshold = at_or_above_health_threshold(thresholds, overall.category)
 
-    return CurrentAqiOut(as_of=newest, is_current=True, overall=overall, pollutants=pollutants, **base)
+    return CurrentAqiOut(
+        as_of=newest, is_current=True, overall=overall, at_or_above_health_threshold=over_threshold,
+        pollutants=pollutants, **base
+    )
