@@ -1,0 +1,49 @@
+# Project handoff (written 2026-09-22, end of session 3)
+
+Read this first in a new chat. It is the complete state of the project: goal, what exists, how it was built, what went wrong, and what to do next. Auto-memory (`MEMORY.md`) holds the same facts in shorter form. **No secrets are in this file.**
+
+## 1. Goal
+A production-style service that tells **Delhi NCR schools whether outdoor practice is safe**, built to grow to other cities/countries later. Two signals per monitoring station: (a) **air quality right now**: official CPCB readings; (b) a **multi-day outlook**: hourly PM2.5/NO2 forecasts turned into go / caution / no-go / no-data. Hard product rule: **`no-data` (missing, stale or incomplete forecast) must never read as "go"**: a school could treat silence as clearance. The frontend is built by **Lovable**; the backend is ours.
+
+## 2. What exists (repo `D:\Desktop\New_Project`, branch `main`, no git remote yet)
+- **Backend**: Python 3.11. `ingestion/` (OpenAQ, ERA5, Open-Meteo, data.gov.in), `features/`, `models/` (LightGBM per station/pollutant/horizon, quantile-derived exceedance probability), `api/` (FastAPI), `orchestration/` (Airflow 2.9.3 DAGs; task code in `plugins/common/tasks.py`), `alerting/`, `db/` (SQLAlchemy 1.4-style `Column()` on purpose + Alembic 0001-0003, Postgres/TimescaleDB), `config/` (`regions.yaml`, `thresholds_cpcb.yaml`, `settings.yaml`), `docker/` (compose), `dashboard/` (old Streamlit, superseded by Lovable), `scripts/`, `tests/`, `docs/`.
+- **Live stack** (Docker Compose on the owner's Windows PC): postgres, airflow-scheduler/webserver, api (:8000), dashboard (:8501). Real data: ~438k sensor readings, 4k model runs, ~85 active stations, hourly CPCB snapshots accumulating from 2026-09-21.
+- **DAGs**: `ingestion_dag` :10 (OpenAQ+ERA5+Open-Meteo, **PAUSED**), `feature_engineering_dag` :30, `forecast_dag` :45, `current_aqi_dag` :40 (data.gov.in), `watchdog_dag` :55 (data checks + Telegram + dead-man's ping), `evaluation_monitoring_dag` daily, `retraining_dag` weekly, `station_maintenance_dag` daily 02:30 (**PAUSED**).
+- **API** (`docs/openapi.json` is the contract; regenerate with `python -m scripts.export_openapi`): `/regions`, `/stations` (+`has_current_aqi`, `has_current_forecast`, `region_id`), `/stations/{id}/current-aqi`, `/forecast/{id}`, `/forecast/{id}/exceedance` (now with `forecast_made_at`, `is_current`), `/forecast/{id}/history`, `/attributions`, `/model-health`, `/subscriptions` (interim: 409 on existing email, validated input), `/health`. CORS allows all origins (restrict at deploy).
+- **Tests**: 120 pass. Integration tests TRUNCATE tables, so they only run against a `*_test` DB via `TEST_DATABASE_URL` (see section 8).
+- **Frontend**: https://github.com/himanshubaliyan7/air-clear (Lovable; TanStack Start/Query, TS). Phase 0 and Phase 1 done, reviewed and merged (my PR #1 fixed a calendar-day bug for zones >= UTC+12, loopback http, timeout, Windows `gen:api`). **Phase 2 plan approved, not yet built.** Phase 4 (subscriptions) ON HOLD. Brief: `docs/lovable_frontend_prompt.md`. Compliance register: `docs/api_compliance.md`. Multi-region plan: `docs/multi_region_plan.md`.
+
+## 3. How it was built (chronology)
+1. **Session 1-2**: built all phases (ingestion, features, models, API, dashboard, Airflow, alerting), then went live on real data. OpenAQ replaced the originally proposed AirNow (US only).
+2. **Session 3** (this one), in order: fixed stale Docker images; ERA5 "latest date available" 400; real-time forecasting (anchor on newest observed hour, 6h staleness cap, upsert); API returns `no-data` never `go`; independent code + security reviews and fixes (subscription hijack found and closed); guarded destructive integration tests; station maintenance; `/regions` + region-aware days; agent team (mostly cut off by the owner's spend limit; salvaged QA tests + architect plan); 72h ingestion lookback after a 13h PC-sleep gap; OpenAQ request pacing from rate-limit headers; **data.gov.in CPCB current-conditions feed** (proved values are AQI sub-indices, matched to stations by coordinates <=250 m, real cities/states from the feed); `current-aqi` endpoint + server-side `at_or_above_health_threshold`; attributions endpoint; watchdog + Telegram alerts (code done, needs the owner's bot); Lovable Phase 0-1 reviewed against the live API in a real browser.
+
+## 4. Key design decisions and why
+- Forecast models use hourly ug/m3 history only. The CPCB feed is **AQI sub-indices** (evidence: PM10 < PM2.5 at 15 of 33 stations), so it powers current conditions and is **never** fed to the models. History accumulates in `station_aqi_snapshots` (option to retrain later).
+- Forecasts anchor on each station's newest observed hour and are skipped if older than `MAX_INPUT_STALENESS_HOURS` = 6 (`common/freshness.py`, shared by generator and API). Stale/missing/incomplete => `no-data`.
+- Frontend never computes recommendations; the API supplies verdicts, categories, time zone, units and credits. Region-agnostic from day one.
+- API Docker image is minimal (no `requests`): API modules must not import ingestion code (guard test `tests/unit/test_api_image_imports.py`).
+
+## 5. Incidents and lessons (do not repeat)
+- Images bake code (only `config/` is mounted): after any code change **`docker compose build` then `up -d --force-recreate`**; `stop/start` does not re-read `docker/.env`.
+- **OpenAQ suspended our account (2026-09-21)** for repeated rate-limit violations (207 x 429 on 20-21 Sep from bursts, overlapping manual+scheduled runs, an earlier backfill). **Never create another account/key to evade it** (terms forbid it). The owner emailed dev@openaq.org (Gmail draft I created, sent 2026-09-22). `ingestion_dag` and `station_maintenance_dag` stay paused until they reply. Ingestion now fails loudly on 401/403 (previously skipped, so runs "succeeded" for 6h with no data).
+- The PC slept ~13h once: no runs, data lost. Real hosting is needed.
+- Deploying with a failing test happened once: only deploy when the suite is green.
+- Spend: launching 7 agents at once hit the owner's monthly limit. Ask before launching teams.
+
+## 6. Current state and numbers (2026-09-22)
+71 of 85 active stations have a current CPCB reading; 0-1 have a forecast (upstream sensor data for the rest is stale). `watchdog_dag` runs clean. Telegram/healthchecks are **not yet configured** (silent). Latest backend commit at time of writing: `3aa556d`.
+
+## 7. Next steps, in order
+1. **OpenAQ reply** (owner). Then: unpause `ingestion_dag`/`station_maintenance_dag`, run `refresh_station_activity` (hides ~14 stale duplicate stations via the 7-day rule), reduce requests (persist sensor ids ~halves them; use the OpenAQ AWS archive for history), and re-check `docs/api_compliance.md`.
+2. **Cloud hosting** (owner is preparing): choose server (2 vCPU/4-8 GB), HTTPS in front (Cloudflare/nginx), no published DB/Airflow/Mailhog ports, strong secrets (Postgres password is a placeholder `change-me`, Airflow admin defaults), restrict CORS to the frontend origin, `DASHBOARD_URL`, backups (pg_dump + off-site), move the stack, then point Lovable's `VITE_API_BASE_URL` at the https URL. Unfinished DevOps work is in gitignored worktrees under `.claude/worktrees/` (Dockerfile hardening, README/architecture docs): review before use.
+3. **Telegram + healthchecks.io**: owner creates the bot/check and adds `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `HEALTHCHECKS_PING_URL` to `docker/.env`; recreate containers; send a test alert.
+4. **Lovable**: Phase 2 (station overview), then Phase 3 (charts; `pollutant_details` gives units and the threshold line), Phase 5 (operator page). Each time: pull `air-clear`, run `npx vitest run` + `npx tsc --noEmit`, load against the live API, review, send fixes as a PR. Frontend must re-sync `docs/openapi.json` (`npm run gen:api`) and show `/attributions` in a footer.
+5. **Subscriptions**: owner-verified double opt-in (needs SMTP, privacy/retention wording); draft code (unmerged) is in a worktree.
+6. Later: multi-region plan, retrain on accumulated CPCB history, ML tuning before the Oct-Nov pollution season, `/model-health` exposure decision, official CPCB breakpoints document check (site certificate was expired).
+
+## 8. Operating notes
+- Secrets live only in `docker/.env` (untracked). Never print or paste keys. Keys present: OpenAQ (suspended), CDS, data.gov.in (personal key works).
+- Test DB: `TEST_DATABASE_URL=postgresql+psycopg2://postgres:<pw from docker/.env>@localhost:5433/airpollution_test`; create with `python -m scripts.setup_test_db`; run `.venv/Scripts/python -m pytest tests`. Never point tests at `airpollution`. Extra agent test DBs `airpollution_{sub,qa,dba,ops}_test` can be dropped.
+- Git Bash mangles `docker exec -w /app` into a Windows path: use PowerShell for that. Files copied into a container's `/tmp` vanish on recreate.
+- Commit before every change; detailed messages ending `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>`.
+- Postgres is published only on 127.0.0.1:5433. My scratch clone of the frontend is at the session scratchpad (`air-clear`); re-clone with `gh repo clone himanshubaliyan7/air-clear` (gh is logged in). Never push to its `main` (Lovable syncs from it): use a branch + PR.
