@@ -50,6 +50,13 @@ class OpenAQSource(SensorSource):
         # /locations/{id} GET per station per chunk, which multiplies real
         # request volume ~25x and reliably burns through OpenAQ's rate limit.
         self._sensor_cache: dict[str, dict[Pollutant, int]] = {}
+        # OpenAQ reports its 60 requests/minute quota on every response
+        # (X-Ratelimit-Remaining / X-Ratelimit-Reset seconds). A run needs ~190
+        # requests, so bursting and then backing off blindly on 429s made runs
+        # crawl for an hour and drop sensors; pace against the reported quota
+        # instead.
+        self._quota_remaining: int | None = None
+        self._quota_reset_at: float | None = None
 
     @property
     def source_name(self) -> SensorSourceName:
@@ -64,9 +71,11 @@ class OpenAQSource(SensorSource):
         url = f"{BASE_URL}{path}"
         backoff = INITIAL_BACKOFF_SECONDS
         for attempt in range(1, MAX_RETRIES + 1):
+            self._wait_for_quota()
             resp = self._session.get(url, params=params, timeout=30)
+            self._record_quota(resp)
             if resp.status_code == 429:
-                retry_after = float(resp.headers.get("Retry-After", backoff))
+                retry_after = float(resp.headers.get("Retry-After") or resp.headers.get("X-Ratelimit-Reset") or backoff)
                 logger.warning(
                     "OpenAQ rate limited on %s (attempt %d/%d), backing off %.1fs",
                     path, attempt, MAX_RETRIES, retry_after,
@@ -85,6 +94,23 @@ class OpenAQSource(SensorSource):
             resp.raise_for_status()
             return resp.json()
         raise RuntimeError(f"OpenAQ request to {path} failed after {MAX_RETRIES} retries (rate limited or server error)")
+
+    def _wait_for_quota(self) -> None:
+        """Sleeps until OpenAQ's window resets when the last response said we
+        are (almost) out of requests, rather than sending one that will 429."""
+        if self._quota_remaining is not None and self._quota_remaining <= 1 and self._quota_reset_at is not None:
+            wait = self._quota_reset_at - time.monotonic()
+            if wait > 0:
+                logger.info("OpenAQ quota nearly exhausted; waiting %.1fs for the window to reset", wait)
+                time.sleep(min(wait, 65.0) + 0.5)
+            self._quota_remaining = None
+
+    def _record_quota(self, resp) -> None:
+        try:
+            self._quota_remaining = int(resp.headers.get("X-Ratelimit-Remaining"))
+            self._quota_reset_at = time.monotonic() + float(resp.headers.get("X-Ratelimit-Reset"))
+        except (TypeError, ValueError):
+            pass  # header absent (or a test double): fall back to the 429 handling
 
     def _paginate(self, path: str, params: dict):
         page = 1

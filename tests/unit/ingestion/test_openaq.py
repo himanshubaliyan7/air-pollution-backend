@@ -290,3 +290,50 @@ def test_failed_location_lookup_is_skipped_not_fatal():
             start=datetime(2026, 9, 20, 12, tzinfo=timezone.utc), end=datetime(2026, 9, 20, 14, tzinfo=timezone.utc),
         )
     assert [r.source_location_id for r in readings] == ["good"]
+
+
+def test_waits_for_window_reset_when_quota_is_exhausted_instead_of_hitting_429():
+    """OpenAQ allows 60 requests/min and says how many remain on every response;
+    bursting into 429s made runs crawl and drop sensors."""
+    class Quota(FakeResponse):
+        def __init__(self, remaining, reset):
+            super().__init__({"results": [], "meta": {"found": 0}})
+            self.headers = {"X-Ratelimit-Remaining": str(remaining), "X-Ratelimit-Reset": str(reset)}
+
+    class Seq(FakeSession):
+        def __init__(self, resps):
+            super().__init__({})
+            self._resps = list(resps)
+
+        def get(self, url, params=None, timeout=None):
+            self.calls.append((url, params))
+            return self._resps.pop(0)
+
+    sleeps = []
+    with patch("ingestion.sources.openaq.time.sleep", side_effect=sleeps.append):
+        source = OpenAQSource(api_key="k", session=Seq([Quota(1, 20), Quota(59, 55)]))
+        source._get("/locations/1", {})   # leaves 1 request in the window, resets in 20s
+        assert sleeps == []               # nothing to wait for yet
+        source._get("/locations/2", {})   # must wait out the window BEFORE sending
+    assert len(sleeps) == 1 and 15 < sleeps[0] <= 21
+
+
+def test_429_backoff_uses_the_reported_reset_when_no_retry_after():
+    class Limited(FakeResponse):
+        def __init__(self):
+            super().__init__({}, status_code=429)
+            self.headers = {"X-Ratelimit-Reset": "7"}
+
+    class Seq(FakeSession):
+        def __init__(self, resps):
+            super().__init__({})
+            self._resps = list(resps)
+
+        def get(self, url, params=None, timeout=None):
+            return self._resps.pop(0)
+
+    sleeps = []
+    with patch("ingestion.sources.openaq.time.sleep", side_effect=sleeps.append):
+        source = OpenAQSource(api_key="k", session=Seq([Limited(), FakeResponse({"results": []})]))
+        source._get("/x", {})
+    assert sleeps == [7.0]
