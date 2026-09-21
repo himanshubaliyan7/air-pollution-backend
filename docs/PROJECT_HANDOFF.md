@@ -29,9 +29,11 @@ A production-style service that tells **Delhi NCR schools whether outdoor practi
 - The PC slept ~13h once: no runs, data lost. Real hosting is needed.
 - Deploying with a failing test happened once: only deploy when the suite is green.
 - Spend: launching 7 agents at once hit the owner's monthly limit. Ask before launching teams.
+- **GitGuardian alert (2026-09-22)** after the first push: it flagged the placeholder default password `postgres` in `common/config.py` and the compose fallbacks. Not a real secret (the owner's real API keys were never in the repo; a scan of tree + full history by value was clean). Fixed in commit `7e47371`: `database_url` has no default, compose requires `POSTGRES_USER/PASSWORD`, `AIRFLOW_ADMIN_PASSWORD` and the Airflow secret key from `docker/.env` (`${VAR:?...}`), example env uses `REPLACE_WITH_A_STRONG_SECRET`. Owner should mark the incident a false positive/placeholder in GitGuardian; no history rewrite needed (private repo). **Still to do: rotate the real Postgres password (currently the placeholder `change-me`) and the Airflow admin/secret values as part of the cloud move.**
+- Private backend repo created 2026-09-22 (https://github.com/himanshubaliyan7/air-pollution-backend); the owner's `docker/.env` is NOT in it, so keep a private copy of the keys.
 
 ## 6. Current state and numbers (2026-09-22)
-71 of 85 active stations have a current CPCB reading; 0-1 have a forecast (upstream sensor data for the rest is stale). `watchdog_dag` runs clean. Telegram/healthchecks are **not yet configured** (silent). Latest backend commit at time of writing: `3aa556d`.
+71 of 85 active stations have a current CPCB reading; 0-1 have a forecast (upstream sensor data for the rest is stale). `watchdog_dag` runs clean. Telegram/healthchecks are **not yet configured** (silent). Latest backend commit at time of writing: `7e47371` (pushed to origin/main). Lovable was mid-build on Phase 2 (owner sent the message 2026-09-22).
 
 ## 7. Next steps, in order
 1. **OpenAQ reply** (owner). Then: unpause `ingestion_dag`/`station_maintenance_dag`, run `refresh_station_activity` (hides ~14 stale duplicate stations via the 7-day rule), reduce requests (persist sensor ids ~halves them; use the OpenAQ AWS archive for history), and re-check `docs/api_compliance.md`.
