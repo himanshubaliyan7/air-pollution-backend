@@ -72,6 +72,32 @@
         }
       }
     },
+    "/api/v1/attributions": {
+      "get": {
+        "tags": [
+          "attributions"
+        ],
+        "summary": "List Attributions",
+        "description": "Data credits to display (e.g. in a page footer) on every screen. Required ones are\na licence condition; the current-aqi response also carries the CPCB text next to the\nreadings it covers.",
+        "operationId": "list_attributions_api_v1_attributions_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AttributionOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Attributions Api V1 Attributions Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/stations/{station_id}/current-aqi": {
       "get": {
         "tags": [
@@ -596,6 +622,46 @@
           "label"
         ],
         "title": "AqiCategoryOut"
+      },
+      "AttributionOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "required": {
+            "type": "boolean",
+            "title": "Required"
+          },
+          "applies_to": {
+            "type": "string",
+            "title": "Applies To"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "text",
+          "url",
+          "required",
+          "applies_to"
+        ],
+        "title": "AttributionOut"
       },
       "CurrentAqiOut": {
         "properties": {

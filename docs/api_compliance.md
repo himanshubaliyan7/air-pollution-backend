@@ -15,12 +15,12 @@ Legend: [V] verified from the provider's own page on the date shown, [U] could n
 - Terms [V]: free API is NON-COMMERCIAL ONLY (private/non-profit sites without ads or subscriptions are fine; commercial use needs a paid plan); data under CC-BY 4.0, so ATTRIBUTION IS REQUIRED.
 - Our use: one small request per hour.
 - Owner confirmed 2026-09-22 that the service is non-commercial (no ads, subscriptions or paid tier), so the free tier is permitted. If that ever changes, a paid plan is required first.
-- OPEN ITEM: the CC-BY attribution is not shown anywhere yet.
+- Credit is served by GET /api/v1/attributions (common/attributions.py); the frontend must show it on every screen.
 
 ## Copernicus Climate Data Store (ERA5 / ERA5T)
 - Terms [V via search 2026-09-22, not the licence page itself - it returned 404]: the "Licence to use Copernicus Products" was replaced by CC-BY on 2 July 2025; reuse, redistribution and commercial use are allowed with clear, visible attribution, e.g. "Generated using Copernicus Climate Change Service information [year]".
 - CDS API request limits: [U] not read; requests queue server-side. We make ~1-2 small requests/hour (see ingestion_dag; the recent-window request slides back to the newest available hour).
-- OPEN ITEM: attribution notice not shown anywhere yet.
+- Credit served by GET /api/v1/attributions (year filled in automatically); the frontend must show it.
 
 ## data.gov.in - CPCB real-time AQI feed
 - Licence [V via the API's own metadata and the portal footer]: Government Open Data License - India (GODL-India); commercial and non-commercial use allowed with attribution. The API returns the exact attribution text (common/aqi.py ATTRIBUTION) and the frontend must show it.
