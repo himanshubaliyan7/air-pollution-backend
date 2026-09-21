@@ -58,6 +58,13 @@ def load_aqi_snapshots(session: Session, records: list[AqiRecord]) -> dict[str, 
             unmatched.add(rec.station_name)
             continue
         matched.add(station.station_id)
+        # OpenAQ station discovery hardcoded city/state to "Delhi" for every station (Noida,
+        # Gurugram and Ghaziabad stations included, 2026-09-22). The CPCB feed carries the
+        # real values, so a matched station takes them from here.
+        if rec.city and station.city != rec.city:
+            station.city = rec.city
+        if rec.state and station.state != rec.state:
+            station.state = rec.state
         values = {
             "station_id": station.station_id,
             "pollutant_id": rec.pollutant_id,

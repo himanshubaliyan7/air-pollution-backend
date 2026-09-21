@@ -157,3 +157,21 @@ def test_api_flags_a_reading_at_or_above_the_health_threshold(db_session):
     load_aqi_snapshots(db_session, [_rec("PM2.5", 250), _rec("PM10", 140), _rec("NO2", 27)])
     body = TestClient(app).get("/api/v1/stations/openaq:bad/current-aqi").json()
     assert body["overall"]["category"] == "poor" and body["at_or_above_health_threshold"] is True
+
+
+def test_matched_station_takes_its_real_city_and_state_from_the_feed(db_session):
+    """Regression: every station was stored with city/state "Delhi", including those in
+    Noida, Gurugram and Ghaziabad, so a station list showed the wrong city."""
+    db_session.add(_station("openaq:noida"))  # created with the hardcoded city/state "Delhi"
+    db_session.commit()
+    record = AqiRecord("Sector - 62, Noida", "Noida", "Uttar Pradesh", 28.6469, 77.3158, "PM2.5", 1, 3, 2, HOUR)
+
+    load_aqi_snapshots(db_session, [record])
+    db_session.expire_all()
+    station = db_session.get(Station, "openaq:noida")
+    assert (station.city, station.state) == ("Noida", "Uttar Pradesh")
+
+    # A row with blank city/state must not blank out what we already know.
+    load_aqi_snapshots(db_session, [AqiRecord("x", "", "", 28.6469, 77.3158, "PM2.5", 1, 3, 2, HOUR)])
+    db_session.expire_all()
+    assert db_session.get(Station, "openaq:noida").city == "Noida"
