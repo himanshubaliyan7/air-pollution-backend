@@ -21,6 +21,7 @@ x-airflow-common: &airflow-common
     SMTP_USER: ${SMTP_USER}
     SMTP_PASSWORD: ${SMTP_PASSWORD}
     ALERT_FROM_ADDRESS: ${ALERT_FROM_ADDRESS}
+    DASHBOARD_URL: ${DASHBOARD_URL:-http://localhost:8501}
   volumes:
     - ../config:/app/config:ro
     - airflow_logs:/opt/airflow/logs
@@ -96,6 +97,7 @@ services:
       AQI_THRESHOLD_CONFIG_PATH: ${AQI_THRESHOLD_CONFIG_PATH:-/app/config/thresholds_cpcb.yaml}
       STATIONS_CONFIG_PATH: ${STATIONS_CONFIG_PATH:-/app/config/stations_delhi_ncr.yaml}
       SETTINGS_CONFIG_PATH: ${SETTINGS_CONFIG_PATH:-/app/config/settings.yaml}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-*}
     volumes:
       - ../config:/app/config:ro
     ports:
