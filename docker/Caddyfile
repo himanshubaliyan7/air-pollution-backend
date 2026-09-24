@@ -1,0 +1,6 @@
+# Reverse proxy + automatic Let's Encrypt TLS for the API.
+# CADDY_SITE_ADDRESS is set in docker/.env, e.g. 123-45-67-89.sslip.io
+# (or a real domain later - just change this one value, no code change needed).
+{$CADDY_SITE_ADDRESS} {
+	reverse_proxy api:8000
+}

@@ -1,0 +1,72 @@
+# Production override for a public host (e.g. the OCI VM). Usage:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d \
+#     postgres db-migrate airflow-init airflow-webserver airflow-scheduler api caddy
+#
+# dashboard and mailhog are deliberately left out of that service list: the
+# Streamlit dashboard is superseded by the Lovable frontend and mailhog is
+# dev-only (see its comment in docker-compose.yml) - a real SMTP_* provider
+# goes in docker/.env instead. Nothing here changes local dev, which keeps
+# using plain `docker compose up -d` against docker-compose.yml alone.
+#
+# restart: unless-stopped is the actual point of this file - it's what makes
+# the stack come back on its own after the VM reboots, unlike the owner's PC.
+# db-migrate and airflow-init are one-shot jobs that exit 0 on success, so
+# they get `on-failure` (retry only if they actually failed) rather than
+# `unless-stopped`, which would otherwise restart-loop a container that
+# succeeded and exited cleanly.
+
+services:
+  postgres:
+    restart: unless-stopped
+
+  db-migrate:
+    restart: on-failure
+
+  airflow-init:
+    restart: on-failure
+
+  airflow-webserver:
+    restart: unless-stopped
+    # Admin-only: not fronted by Caddy. Reach it with an SSH tunnel
+    # (ssh -L 8080:localhost:8080 <user>@<host>), never expose it publicly.
+    # `!override` replaces the base file's "8080:8080" (published on every
+    # interface) instead of Compose's default list-merge behavior, which
+    # APPENDS override ports to the base list rather than replacing them -
+    # confirmed with `docker compose config`: without `!override` both the
+    # public and loopback-only bindings end up active at once, silently
+    # defeating the whole point of this override.
+    ports: !override
+      - "127.0.0.1:8080:8080"
+
+  airflow-scheduler:
+    restart: unless-stopped
+
+  api:
+    restart: unless-stopped
+    # Only reachable through Caddy (below) or from other containers on the
+    # compose network - not published on the host's public interface.
+    # See the airflow-webserver comment above: `!override` is required or
+    # this silently stacks on top of the base file's public "8000:8000"
+    # instead of replacing it.
+    ports: !override
+      - "127.0.0.1:8000:8000"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      CADDY_SITE_ADDRESS: ${CADDY_SITE_ADDRESS:?set CADDY_SITE_ADDRESS in docker/.env, e.g. an ip-with-dashes.sslip.io host}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+
+volumes:
+  caddy_data:
+  caddy_config:
