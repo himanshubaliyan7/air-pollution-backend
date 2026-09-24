@@ -2,14 +2,20 @@
 # Nightly Postgres backup for a production host: full pg_dump (schema+data,
 # custom format) via the running postgres container, rotated locally.
 #
-# A FULL dump/restore is what TimescaleDB backup/restore actually supports -
-# unlike a --data-only dump (which serializes hypertable rows through
-# per-chunk tables under _timescaledb_internal and breaks against any target
-# whose hypertables weren't created with identical chunk IDs), restoring a
-# full dump into a genuinely empty database recreates the TimescaleDB
-# catalog/hypertable/chunk structure from scratch consistently. Restore with:
-#   docker exec -i docker-postgres-1 pg_restore -U postgres -d airpollution --clean --if-exists /path/to/dump
-# against a freshly `CREATE DATABASE`'d (not Alembic-migrated) target.
+# A FULL dump (not --data-only) is what actually works against TimescaleDB:
+# --data-only serializes hypertable rows through per-chunk tables under
+# _timescaledb_internal, which breaks against any target whose hypertables
+# weren't created with identical chunk IDs (hit this migrating data onto the
+# OCI instance - see PROJECT_HANDOFF.md). A full dump restores the data
+# correctly, but pg_restore still can't recreate 4-5 FK constraints that
+# reference or live on a hypertable (`ALTER TABLE ONLY ... ADD CONSTRAINT`
+# isn't supported there) - verified by an actual restore-to-a-throwaway-DB
+# test on 2026-09-24: all data landed with correct row counts, restore
+# logged "errors ignored: 5" for exactly those FK constraints, and manually
+# re-running them WITHOUT `ONLY` at the hypertable/parent level (not the
+# individual chunk table) fixed all of them cleanly. See restore_db.sh,
+# which automates the full procedure and has this fixup built in - don't
+# hand-restore from this dump format without it.
 #
 # Run via cron on the server, e.g. daily at 03:00 local:
 #   0 3 * * * BACKUP_DIR=$HOME/backups /home/ubuntu/air-pollution-backend/scripts/backup_db.sh >> $HOME/backups/backup.log 2>&1
