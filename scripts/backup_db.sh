@@ -17,14 +17,23 @@
 # which automates the full procedure and has this fixup built in - don't
 # hand-restore from this dump format without it.
 #
+# Optionally also pushes the dump off-instance via rclone (RCLONE_REMOTE,
+# e.g. "oci:air-pollution-backups") so a lost/corrupted VM doesn't take the
+# backups with it - set up once with `rclone config` (Oracle Object Storage's
+# S3-compatible endpoint needs `provider = Other`, `region = <region>` and
+# `force_path_style = true` in the rclone remote - without force_path_style
+# it fails auth with a misleading "SignatureDoesNotMatch" error, confirmed
+# 2026-09-24).
+#
 # Run via cron on the server, e.g. daily at 03:00 local:
-#   0 3 * * * BACKUP_DIR=$HOME/backups /home/ubuntu/air-pollution-backend/scripts/backup_db.sh >> $HOME/backups/backup.log 2>&1
+#   0 3 * * * BACKUP_DIR=$HOME/backups RCLONE_REMOTE=oci:air-pollution-backups /home/ubuntu/air-pollution-backend/scripts/backup_db.sh >> $HOME/backups/backup.log 2>&1
 set -euo pipefail
 
 BACKUP_DIR="${BACKUP_DIR:-$HOME/backups}"
 KEEP_DAYS="${BACKUP_KEEP_DAYS:-14}"
 CONTAINER="${POSTGRES_CONTAINER:-docker-postgres-1}"
 DB="${POSTGRES_DB:-airpollution}"
+RCLONE_REMOTE="${RCLONE_REMOTE:-}"
 
 mkdir -p "$BACKUP_DIR"
 STAMP=$(date +%Y%m%d_%H%M%S)
@@ -37,5 +46,12 @@ sudo docker exec "$CONTAINER" rm -f "/tmp/${FILE}"
 
 echo "== Rotating backups older than ${KEEP_DAYS} days in ${BACKUP_DIR} =="
 find "$BACKUP_DIR" -maxdepth 1 -name "${DB}_*.dump" -mtime "+${KEEP_DAYS}" -print -delete
+
+if [ -n "$RCLONE_REMOTE" ]; then
+    echo "== Uploading to ${RCLONE_REMOTE} =="
+    rclone copy "${BACKUP_DIR}/${FILE}" "${RCLONE_REMOTE}/"
+    echo "== Pruning remote backups older than ${KEEP_DAYS} days =="
+    rclone delete "${RCLONE_REMOTE}/" --min-age "${KEEP_DAYS}d"
+fi
 
 echo "Backup complete: ${BACKUP_DIR}/${FILE} ($(du -h "${BACKUP_DIR}/${FILE}" | cut -f1))"
