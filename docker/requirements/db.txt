@@ -1,0 +1,18 @@
+# Locked runtime deps for db/Dockerfile (direct: sqlalchemy, alembic,
+# psycopg2-binary, pydantic, pydantic-settings, pyyaml).
+# Generated from the image that was running in production.
+alembic==1.20.0
+annotated-types==0.8.0
+greenlet==3.5.6
+Mako==1.4.1
+MarkupSafe==3.0.3
+packaging==26.3
+psycopg2-binary==2.9.13
+pydantic==2.13.5
+pydantic-settings==2.15.0
+pydantic_core==2.46.5
+python-dotenv==1.2.3
+PyYAML==6.0.3
+SQLAlchemy==2.0.54
+typing-inspection==0.4.4
+typing_extensions==4.16.0

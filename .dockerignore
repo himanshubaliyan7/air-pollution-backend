@@ -1,0 +1,23 @@
+# Build context for every image is the repo root (see docker/docker-compose.yml).
+# Keep secrets, VCS data and local artifacts out of the context.
+.git
+.github
+.claude
+**/.env
+**/.env.*
+docker/env
+**/__pycache__
+**/*.pyc
+.venv
+venv
+.pytest_cache
+.ruff_cache
+.coverage
+htmlcov
+models/artifacts
+data
+docs
+tests
+backups
+*.parquet
+*.csv

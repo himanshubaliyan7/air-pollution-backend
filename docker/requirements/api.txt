@@ -1,0 +1,44 @@
+# Locked runtime deps for api/Dockerfile. Generated from the image that was
+# running in production and verified against the test suite; direct deps are
+# those the Dockerfile previously listed as '>=' (sqlalchemy, psycopg2-binary,
+# pydantic, pydantic-settings, pyyaml, pandas, numpy, python-dateutil, tzdata,
+# fastapi, uvicorn[standard], email-validator, lightgbm, scikit-learn).
+# To update: change versions deliberately, rebuild, run the tests, commit.
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+click==8.5.0
+cloudpickle==3.1.2
+dnspython==2.8.0
+email-validator==2.3.0
+fastapi==0.141.1
+greenlet==3.5.6
+h11==0.16.0
+httptools==0.8.0
+idna==3.20
+joblib==1.6.0
+lightgbm==4.7.0
+narwhals==2.26.0
+numpy==2.4.6
+packaging==26.3
+pandas==3.0.6
+psycopg2-binary==2.9.13
+pydantic==2.13.5
+pydantic-settings==2.15.0
+pydantic_core==2.46.5
+python-dateutil==2.9.0.post0
+python-dotenv==1.2.3
+PyYAML==6.0.3
+scikit-learn==1.9.1
+scipy==1.17.1
+six==1.17.0
+SQLAlchemy==2.0.54
+starlette==1.6.0
+threadpoolctl==3.7.0
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+tzdata==2026.4
+uvicorn==0.53.0
+uvloop==0.22.1
+watchfiles==1.2.0
+websockets==17.1

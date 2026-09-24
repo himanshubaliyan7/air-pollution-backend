@@ -1,20 +1,32 @@
-FROM python:3.11-slim
+# syntax=docker/dockerfile:1
+FROM python:3.11.16-slim-trixie
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Unprivileged runtime user (fixed uid so volume ownership is predictable).
+RUN groupadd --system --gid 10001 app \
+    && useradd --system --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app
 
 WORKDIR /app
 
-COPY pyproject.toml ./
-RUN pip install --no-cache-dir \
-    sqlalchemy>=2.0 psycopg2-binary>=2.9 pydantic>=2.6 pydantic-settings>=2.2 pyyaml>=6.0 \
-    pandas>=2.2 numpy>=1.26 python-dateutil>=2.9 tzdata>=2024.1 \
-    fastapi>=0.110 "uvicorn[standard]>=0.29" email-validator>=2.1 \
-    lightgbm>=4.3 scikit-learn>=1.4
+# Locked dependency set (docker/requirements/api.txt). NOTE: the previous
+# unquoted `pip install pkg>=x` lines were parsed by the shell as output
+# redirections, so the version floors were never applied.
+COPY docker/requirements/api.txt ./requirements.txt
+RUN pip install -r requirements.txt
 
+# Application code stays root-owned and read-only to the runtime user.
 COPY common ./common
 COPY db ./db
 COPY ingestion ./ingestion
 COPY features ./features
 COPY models ./models
 COPY api ./api
+
+USER app
 
 EXPOSE 8000
 
