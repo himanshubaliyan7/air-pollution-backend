@@ -1,6 +1,20 @@
 # Reverse proxy + automatic Let's Encrypt TLS for the API.
 # CADDY_SITE_ADDRESS is set in docker/.env, e.g. 123-45-67-89.sslip.io
 # (or a real domain later - just change this one value, no code change needed).
+#
+# HTTP/3 explicitly disabled: Caddy advertises it via Alt-Svc by default, and
+# a browser that tries to upgrade to QUIC (UDP/443) silently fails to connect
+# since only TCP 80/443 are open in the OCI security list and the instance's
+# local firewall - confirmed live as "TypeError: Failed to fetch" in Chrome
+# while curl (HTTP/1.1 or 2 only) worked fine against the same origin. Rather
+# than open another port at two firewall layers for a protocol this app gets
+# no real benefit from, just don't advertise it.
+{
+	servers {
+		protocols h1 h2
+	}
+}
+
 {$CADDY_SITE_ADDRESS} {
 	reverse_proxy api:8000
 }
