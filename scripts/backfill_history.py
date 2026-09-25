@@ -10,11 +10,13 @@ through a multi-month backfill doesn't lose already-fetched days).
 Usage:
     python -m scripts.backfill_history --days 180
     python -m scripts.backfill_history --days 180 --skip-weather   # OpenAQ only
+    python -m scripts.backfill_history --weather-only --start 2025-09-25 --end 2026-03-01
+        # ERA5 for a fixed window (sensor history for old windows: scripts.backfill_archive)
 """
 
 import argparse
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from common.config import get_settings
 from common.constants import Pollutant
@@ -70,12 +72,12 @@ def backfill_sensor_readings(days: int, chunk_days: int = 30) -> int:
         session.close()
 
 
-def backfill_weather(days: int, chunk_days: int = 5) -> int:
+def backfill_weather(days: int, chunk_days: int = 5, start: datetime | None = None, end: datetime | None = None) -> int:
     session = get_session()
     try:
         client = ERA5Client()
-        end = datetime.now(timezone.utc)
-        start = end - timedelta(days=days)
+        end = end or datetime.now(timezone.utc)
+        start = start or end - timedelta(days=days)
 
         total = 0
         chunk_start = start
@@ -95,13 +97,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--days", type=int, default=180, help="How many days of history to backfill")
     parser.add_argument("--skip-weather", action="store_true", help="Skip the (slower) ERA5 backfill")
+    parser.add_argument("--weather-only", action="store_true", help="Skip the OpenAQ API backfill")
+    parser.add_argument("--start", type=date.fromisoformat, help="weather window start (with --end), UTC date")
+    parser.add_argument("--end", type=date.fromisoformat, help="weather window end, exclusive")
     args = parser.parse_args()
 
-    n_sensor = backfill_sensor_readings(args.days)
-    logger.info("Backfilled %d sensor readings", n_sensor)
+    if not args.weather_only:
+        n_sensor = backfill_sensor_readings(args.days)
+        logger.info("Backfilled %d sensor readings", n_sensor)
 
     if not args.skip_weather:
-        n_weather = backfill_weather(args.days)
+        as_utc = lambda d: datetime(d.year, d.month, d.day, tzinfo=timezone.utc) if d else None
+        n_weather = backfill_weather(args.days, start=as_utc(args.start), end=as_utc(args.end))
         logger.info("Backfilled %d weather readings", n_weather)
 
 
