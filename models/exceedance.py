@@ -40,12 +40,16 @@ def get_health_threshold_concentration(pollutant: Pollutant, thresholds: dict | 
 
 
 def get_aqi_category(thresholds: dict, pollutant: Pollutant, concentration: float) -> str:
+    """CPCB publishes integer ranges (61-90, 91-120, ...), so each band runs
+    from its lower bound up to the next band's: 90.5 is moderate, not a gap.
+    Matching whole ranges instead let fractional forecasts between bands
+    fall through to "good"."""
     breakpoints = thresholds["pollutants"][pollutant.value]["breakpoints"]
+    category = breakpoints[0]["category"]
     for bp in breakpoints:
-        lo, hi = bp["conc_range"]
-        if lo <= concentration <= hi:
-            return bp["category"]
-    return breakpoints[-1]["category"] if concentration > breakpoints[-1]["conc_range"][1] else breakpoints[0]["category"]
+        if concentration >= bp["conc_range"][0]:
+            category = bp["category"]
+    return category
 
 
 def probability_from_quantiles(quantile_predictions: dict[float, float], threshold: float) -> float:

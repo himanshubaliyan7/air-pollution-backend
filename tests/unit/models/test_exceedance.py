@@ -32,6 +32,25 @@ def test_get_aqi_category_roundtrip(thresholds):
     assert get_aqi_category(thresholds, Pollutant.PM25, 95) == "poor"
 
 
+@pytest.mark.parametrize(
+    "pollutant, value, expected",
+    [
+        (Pollutant.PM25, 30.5, "good"),
+        (Pollutant.PM25, 60.5, "satisfactory"),
+        (Pollutant.PM25, 90.5, "moderate"),
+        (Pollutant.PM25, 91.0, "poor"),
+        (Pollutant.PM25, 120.5, "poor"),
+        (Pollutant.PM25, 250.5, "very_poor"),
+        (Pollutant.PM25, 999.0, "severe"),
+        (Pollutant.NO2, 180.5, "moderate"),
+        (Pollutant.NO2, 400.5, "very_poor"),
+        (Pollutant.PM25, -1.0, "good"),
+    ],
+)
+def test_get_aqi_category_between_integer_ranges_never_falls_to_good(thresholds, pollutant, value, expected):
+    assert get_aqi_category(thresholds, pollutant, value) == expected
+
+
 def test_probability_from_quantiles_midpoint_interpolation():
     # median forecast = 100, 10th pct = 60, 90th pct = 140 -> roughly
     # symmetric spread. A threshold exactly at the median should give ~50%.
