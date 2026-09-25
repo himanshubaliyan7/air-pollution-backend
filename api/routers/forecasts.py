@@ -8,31 +8,20 @@ from api.db import get_db
 from api.schemas.forecasts import ForecastPointOut, ForecastSeriesOut, HistoryOut, HistoryPointOut
 from api.schemas.model_health import ModelHealthOut
 from common.constants import Pollutant
-from common.freshness import is_input_fresh
 from common.regions import region_for_point
 from db.models import ExceedanceEvaluation, Forecast, RawSensorReading, Station
+from models.outlook import is_forecast_current, latest_forecast_made_at  # noqa: F401  (re-exported)
 
 router = APIRouter(tags=["forecasts"])
 
 
 def _latest_forecast_made_at(db: Session, station_id: str, pollutant: Pollutant) -> datetime | None:
-    return db.execute(
-        select(func.max(Forecast.forecast_made_at)).where(
-            Forecast.station_id == station_id, Forecast.pollutant == pollutant
-        )
-    ).scalar_one_or_none()
+    return latest_forecast_made_at(db, station_id, pollutant)
 
 
 def _station_timezone(station: Station) -> str | None:
     region = region_for_point(station.lat, station.lon)
     return region.timezone if region else None
-
-
-def is_forecast_current(made_at: datetime | None, now: datetime | None = None) -> bool:
-    """A forecast is only actionable while its anchor hour is fresh by the same
-    rule generate_forecasts uses (common.freshness); older, it must be treated
-    as no forecast at all, never as an implicit "go"."""
-    return made_at is not None and is_input_fresh(made_at, now or datetime.now(timezone.utc))
 
 
 @router.get("/forecast/{station_id}", response_model=ForecastSeriesOut)

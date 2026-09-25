@@ -1,0 +1,139 @@
+"""The school-facing go/caution/no-go outlook for one station and pollutant.
+
+Shared by GET /forecast/{id}/exceedance and the daily alert digest, so the
+website and the email can never disagree about a day.
+
+Each configured horizon (24 h, 48 h, ...) targets a single future timestamp
+about a day apart from its neighbours, so each forecast row stands in for its
+calendar day; rows are only bucketed to the station-local calendar day.
+"""
+
+from dataclasses import dataclass
+from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from common.constants import DEFAULT_HORIZONS_HOURS, Pollutant
+from common.freshness import is_input_fresh
+from common.regions import region_for_point
+from db.models import Forecast, Station
+from models.exceedance import get_aqi_category, load_thresholds
+
+CAUTION_PROBABILITY_FLOOR = 0.15  # below the decision threshold but worth flagging as "caution"
+
+
+@dataclass(frozen=True)
+class OutlookDay:
+    date: date
+    exceedance_flag: bool
+    exceedance_probability: float
+    worst_case_value: float
+    aqi_category: str
+
+    @property
+    def verdict(self) -> str:
+        if self.exceedance_flag:
+            return "no-go"
+        if self.exceedance_probability >= CAUTION_PROBABILITY_FLOOR:
+            return "caution"
+        return "go"
+
+
+@dataclass(frozen=True)
+class Outlook:
+    station_id: str
+    pollutant: str
+    timezone: str
+    forecast_made_at: datetime | None
+    is_current: bool
+    days: list[OutlookDay]
+    overall_recommendation: str  # "go" | "caution" | "no-go" | "no-data"
+
+    def verdict_for(self, day: date) -> str:
+        """A single day's verdict; a day without a current forecast is no-data, never go."""
+        if not self.is_current:
+            return "no-data"
+        match = next((d for d in self.days if d.date == day), None)
+        return match.verdict if match else "no-data"
+
+
+def station_timezone(station: Station) -> str:
+    region = region_for_point(station.lat, station.lon)
+    return region.timezone if region else "UTC"
+
+
+def latest_forecast_made_at(session: Session, station_id: str, pollutant: Pollutant) -> datetime | None:
+    return session.execute(
+        select(func.max(Forecast.forecast_made_at)).where(
+            Forecast.station_id == station_id, Forecast.pollutant == pollutant
+        )
+    ).scalar_one_or_none()
+
+
+def is_forecast_current(made_at: datetime | None, now: datetime | None = None) -> bool:
+    """A forecast is only actionable while its anchor hour is fresh by the same
+    rule generate_forecasts uses (common.freshness); older, it must be treated
+    as no forecast at all, never as an implicit "go"."""
+    return made_at is not None and is_input_fresh(made_at, now or datetime.now(timezone.utc))
+
+
+def build_outlook(
+    session: Session, station: Station, pollutant: Pollutant, days_ahead: int = 5, now: datetime | None = None
+) -> Outlook:
+    tz_name = station_timezone(station)
+    made_at = latest_forecast_made_at(session, station.station_id, pollutant)
+    # No forecast, or one anchored on input older than generate_forecasts is
+    # willing to use, must never read as "go" - a school would treat silence
+    # as clearance.
+    if not is_forecast_current(made_at, now):
+        return Outlook(station.station_id, pollutant.value, tz_name, made_at, False, [], "no-data")
+
+    rows = session.execute(
+        select(Forecast)
+        .where(
+            Forecast.station_id == station.station_id,
+            Forecast.pollutant == pollutant,
+            Forecast.forecast_made_at == made_at,
+            Forecast.horizon_hours <= days_ahead * 24,
+        )
+        .order_by(Forecast.target_time)
+    ).scalars().all()
+
+    thresholds = load_thresholds()
+    by_day: dict = {}
+    for r in rows:
+        local_date = r.target_time.astimezone(ZoneInfo(tz_name)).date()
+        existing = by_day.get(local_date)
+        # If more than one horizon lands on the same local day, keep the
+        # worst-case (highest exceedance probability) one.
+        if existing is None or r.exceedance_probability > existing.exceedance_probability:
+            by_day[local_date] = r
+
+    days = [
+        OutlookDay(
+            date=d,
+            exceedance_flag=r.exceedance_flag,
+            exceedance_probability=r.exceedance_probability,
+            worst_case_value=r.quantile_high,
+            aqi_category=get_aqi_category(thresholds, pollutant, r.quantile_high),
+        )
+        for d, r in sorted(by_day.items())
+    ]
+
+    # predict.forecast can skip individual horizons (missing model, gap in lag
+    # history), so the newest run may cover only some days. Known bad days still
+    # mean no-go, but an incomplete run with nothing flagged must not read as go.
+    expected = {h for h in DEFAULT_HORIZONS_HOURS if h <= days_ahead * 24}
+    incomplete = not expected <= {r.horizon_hours for r in rows}
+
+    if any(d.exceedance_flag for d in days):
+        recommendation = "no-go"
+    elif incomplete:
+        recommendation = "no-data"
+    elif any(d.exceedance_probability >= CAUTION_PROBABILITY_FLOOR for d in days):
+        recommendation = "caution"
+    else:
+        recommendation = "go"
+    return Outlook(station.station_id, pollutant.value, tz_name, made_at, True, days, recommendation)
