@@ -15,6 +15,7 @@ from common.constants import SensorSourceName
 from db.models import RawSensorReading
 from ingestion.config import make_station_id
 from ingestion.sources.base import SensorReading
+from ingestion.units import to_canonical
 
 
 def load_sensor_readings(
@@ -26,19 +27,24 @@ def load_sensor_readings(
         return 0
 
     now = datetime.now(timezone.utc)
-    rows = [
-        {
+    rows = []
+    for r in readings:
+        converted = to_canonical(r.pollutant, r.value, r.unit)
+        if converted is None:
+            continue
+        value, unit = converted
+        rows.append({
             "station_id": make_station_id(source, r.source_location_id),
             "pollutant": r.pollutant,
             "observed_at": r.observed_at,
             "source": source,
-            "value": r.value,
-            "unit": r.unit,
+            "value": value,
+            "unit": unit,
             "source_record_id": r.source_record_id,
             "ingested_at": now,
-        }
-        for r in readings
-    ]
+        })
+    if not rows:
+        return 0
 
     stmt = insert(RawSensorReading).values(rows)
     stmt = stmt.on_conflict_do_update(
