@@ -31,6 +31,7 @@ from sqlalchemy import (
     ARRAY,
     Boolean,
     Column,
+    Date,
     DateTime,
     Enum,
     Float,
@@ -226,6 +227,9 @@ class AlertSubscription(Base):
     # that began at email_window_started_at.
     email_window_started_at = Column(DateTime(timezone=True), nullable=True)
     email_send_count = Column(Integer, nullable=False, default=0, server_default="0")
+    # When the owner switched alerts off; retention deletes the row 90 days
+    # later (alerting/retention.py). Cleared when they switch alerts back on.
+    unsubscribed_at = Column(DateTime(timezone=True), nullable=True)
 
     alert_log_entries = relationship("AlertLog", back_populates="subscriber")
 
@@ -287,3 +291,19 @@ HYPERTABLE_SPECS = [
     ("features", "feature_time", "7 days"),
     ("forecasts", "target_time", "7 days"),
 ]
+
+
+class DigestLog(Base):
+    """One row per daily digest attempt. The unique (subscriber, digest_date)
+    key makes a retried digest task unable to email anyone twice for a day."""
+
+    __tablename__ = "digest_log"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    subscriber_id = Column(UUID(as_uuid=True), ForeignKey("alert_subscriptions.subscriber_id"), nullable=False)
+    digest_date = Column(Date, nullable=False)  # the local day the digest is about
+    sent_at = Column(DateTime(timezone=True), nullable=False)
+    status = Column(Enum(AlertStatus, name="alert_status", create_type=False), nullable=False)
+    error_detail = Column(Text, nullable=True)
+
+    __table_args__ = (UniqueConstraint("subscriber_id", "digest_date", name="uq_digest_log_subscriber_day"),)
