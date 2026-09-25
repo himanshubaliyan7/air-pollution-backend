@@ -28,6 +28,13 @@ from models.lightgbm_pipeline import fit_classifier, fit_point_model, fit_quanti
 logger = logging.getLogger(__name__)
 
 
+def _f1(metrics: dict) -> float:
+    """F1 for logging and promotion. It is None when the holdout had no real and
+    no predicted exceedances (common in the monsoon); promotion then compares it
+    as 0.0, as it always did before undefined metrics became None (2026-09-25)."""
+    return metrics["f1"] if metrics["f1"] is not None else 0.0
+
+
 def load_model_config() -> dict:
     return load_yaml_config(get_settings().model_config_path)
 
@@ -200,7 +207,7 @@ def train_station_pollutant_horizon(
     logger.info(
         "Trained %s/%s/%dh: quantile-derived f1=%.3f, classifier f1=%.3f (holdout n=%d)",
         station_id, pollutant.value, horizon_hours,
-        quantile_exceedance_metrics["f1"], clf_metrics["f1"], len(X_hold),
+        _f1(quantile_exceedance_metrics), _f1(clf_metrics), len(X_hold),
     )
 
     registry.promote_if_better(
@@ -210,7 +217,7 @@ def train_station_pollutant_horizon(
         horizon_hours=horizon_hours,
         model_type=ModelType.QUANTILE_REGRESSOR,
         candidate_model_ids=[quantile_model_ids[q] for q in quantiles],
-        candidate_f1=quantile_exceedance_metrics["f1"],
+        candidate_f1=_f1(quantile_exceedance_metrics),
     )
     registry.promote_if_better(
         session,
@@ -219,7 +226,7 @@ def train_station_pollutant_horizon(
         horizon_hours=horizon_hours,
         model_type=ModelType.CLASSIFIER,
         candidate_model_ids=[clf_model_id],
-        candidate_f1=clf_metrics["f1"],
+        candidate_f1=_f1(clf_metrics),
     )
 
     return registered_ids
