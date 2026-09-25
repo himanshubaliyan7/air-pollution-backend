@@ -8,11 +8,14 @@ Layout (verified 2026-09-25): one gzipped CSV per location per local day,
 with columns location_id, sensors_id, location, datetime, lat, lon, parameter,
 units, value. A missing day is an S3 error document (not gzip), not an empty file.
 
-`datetime` is the END of the hourly period in local time: the archive's
-"2026-04-15T01:00:00+05:30" (19:30 UTC) is the value the API returns for
-period.datetimeFrom 18:30 UTC. Verified value-for-value against API-ingested
-rows for station 8118. So observed_at = floor_hour(datetime - 1 h), matching
-OpenAQSource, and source_record_id reuses the API's "<sensor>:<from UTC>" form.
+`datetime` is the END of each measurement period in local time. Hourly
+stations: the archive's "2026-04-15T01:00:00+05:30" (19:30 UTC) is the value
+the API returns for period.datetimeFrom 18:30 UTC (verified value-for-value,
+station 8118). Some stations (DPCC/IMD) publish 15-minute periods instead,
+while the API serves hourly averages; each reading belongs to the local hour
+that contains its period end (00:45 -> the 00:00-01:00 hour), and the hour's
+readings are averaged. observed_at = floor_hour(UTC start of that local hour),
+matching OpenAQSource; source_record_id reuses the API's "<sensor>:<from UTC>".
 
 Units are passed through as published (NO2 arrives in ppb, like the API).
 """
@@ -21,6 +24,7 @@ import csv
 import gzip
 import io
 import logging
+from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 
 import requests
@@ -42,10 +46,20 @@ def day_url(location_id: str, day: date) -> str:
     )
 
 
+def _hour_start_utc(period_end: datetime) -> datetime:
+    """UTC start of the local hour containing a period that ends at `period_end`."""
+    hour_end = period_end.replace(minute=0, second=0, microsecond=0)
+    if hour_end != period_end:
+        hour_end += timedelta(hours=1)
+    return (hour_end - timedelta(hours=1)).astimezone(timezone.utc)
+
+
 def parse_day(raw_csv: str, location_id: str, sensor_ids: dict[Pollutant, int] | None = None) -> list[SensorReading]:
-    """Rows for our pollutants. With `sensor_ids`, keeps only the sensor the live
-    pipeline uses for each pollutant, so history and live data share a sensor."""
-    readings = []
+    """Hourly readings for our pollutants (sub-hourly periods averaged). With
+    `sensor_ids`, keeps only the sensor the live pipeline uses for each
+    pollutant, so history and live data share a sensor."""
+    buckets: dict[tuple, list[float]] = defaultdict(list)
+    units: dict[tuple, str] = {}
     for row in csv.DictReader(io.StringIO(raw_csv)):
         pollutant = _PARAMETER_TO_POLLUTANT.get((row.get("parameter") or "").strip())
         if pollutant is None:
@@ -58,18 +72,20 @@ def parse_day(raw_csv: str, location_id: str, sensor_ids: dict[Pollutant, int] |
             continue
         if sensor_ids is not None and sensor_ids.get(pollutant) != sensor_id:
             continue
-        period_start = (period_end - timedelta(hours=1)).astimezone(timezone.utc)
-        readings.append(
-            SensorReading(
-                source_location_id=str(location_id),
-                pollutant=pollutant,
-                value=value,
-                unit=(row.get("units") or "").strip(),
-                observed_at=period_start.replace(minute=0, second=0, microsecond=0),
-                source_record_id=f"{sensor_id}:{period_start:%Y-%m-%dT%H:%M:%SZ}",
-            )
+        key = (pollutant, sensor_id, _hour_start_utc(period_end))
+        buckets[key].append(value)
+        units[key] = (row.get("units") or "").strip()
+    return [
+        SensorReading(
+            source_location_id=str(location_id),
+            pollutant=pollutant,
+            value=sum(values) / len(values),
+            unit=units[(pollutant, sensor_id, start)],
+            observed_at=start.replace(minute=0, second=0, microsecond=0),
+            source_record_id=f"{sensor_id}:{start:%Y-%m-%dT%H:%M:%SZ}",
         )
-    return readings
+        for (pollutant, sensor_id, start), values in sorted(buckets.items(), key=lambda kv: (kv[0][0].value, kv[0][1], kv[0][2]))
+    ]
 
 
 class OpenAQArchiveClient:
