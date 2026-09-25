@@ -43,11 +43,20 @@ class AlertStatus(str, enum.Enum):
 DEFAULT_HORIZONS_HOURS = [24, 48, 72, 96, 120]
 
 # Oldest sensor input a forecast may be made from. OpenAQ/CPCB data is not
-# real-time: verified 2026-09-20 that most stations trail by days (61 of 124
-# stopped at 09-17 13:00 upstream) and the rest by ~2h. A forecast anchored on
-# a days-old reading would be presented to schools as current, so stations
-# staler than this are skipped and reported instead.
-MAX_INPUT_STALENESS_HOURS = 6
+# real-time: most Delhi NCR CPCB stations arrive ~12 h late in batches
+# (measured 2026-09-25: 64 of 85 stations exactly 12 h behind), a few by ~2 h,
+# and some stop for days. A days-old anchor must never be presented as current,
+# so stations staler than this are skipped and reported instead.
+# Raised from 6 to 24 on 2026-09-25: the 6 h limit left only 7 of 85 stations
+# forecastable, and scripts/backtest_models.py showed little skill lost from an
+# older anchor (hourly exceedance recall 0.32 at 24 h vs 0.30 at 48 h). The
+# anchor hour is served as `forecast_made_at` so clients show the data age.
+MAX_INPUT_STALENESS_HOURS = 24
+
+# Oldest CPCB snapshot the API still serves as "current conditions". Kept
+# separate from (and stricter than) the forecast-input limit above: a reading
+# is presented as what the air is like now, so a day-old one must not qualify.
+MAX_CURRENT_READING_AGE_HOURS = 6
 
 # Quantiles fitted per horizon; used both for uncertainty bands and for
 # interpolating P(value > threshold) in models/exceedance.py.

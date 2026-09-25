@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from api.db import get_db
 from api.routers.forecasts import is_forecast_current
 from api.schemas.stations import StationDetailOut, StationOut
+from common.freshness import is_reading_current
 from common.regions import region_for_point
 from db.models import Forecast, RawSensorReading, Station, StationAqiSnapshot
 
@@ -59,7 +60,7 @@ def list_stations(region_id: str | None = Query(None), db: Session = Depends(get
             region_id=_region_id(s),
             latest_observed_at=latest_reading.get(s.station_id),
             has_current_forecast=is_forecast_current(latest_forecast.get(s.station_id)),
-            has_current_aqi=is_forecast_current(latest_snapshot.get(s.station_id)),
+            has_current_aqi=is_reading_current(latest_snapshot.get(s.station_id), now),
         )
         for s in stations
     ]

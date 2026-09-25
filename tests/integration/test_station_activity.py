@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from common.constants import SensorSourceName
+from common.constants import MAX_INPUT_STALENESS_HOURS, SensorSourceName
 from db.models import Station
 
 NOW = datetime.now(timezone.utc)
@@ -84,7 +84,7 @@ def test_api_lists_current_forecast_stations_first_and_stale_forecast_is_no_data
     assert [r["has_current_forecast"] for r in rows] == [True, False]
 
     # Age the forecast past the staleness limit: it must stop reading as actionable.
-    db_session.execute(update(Forecast).values(forecast_made_at=NOW - timedelta(hours=12)))
+    db_session.execute(update(Forecast).values(forecast_made_at=NOW - timedelta(hours=MAX_INPUT_STALENESS_HOURS + 1)))
     db_session.commit()
     rows = client.get("/api/v1/stations").json()
     assert all(r["has_current_forecast"] is False for r in rows)

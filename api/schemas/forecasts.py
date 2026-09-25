@@ -26,6 +26,9 @@ class ForecastSeriesOut(BaseModel):
 
 class ExceedanceDayOut(BaseModel):
     date: date
+    # Hourly-peak rule (owner decision 2026-09-25): true when a forecast HOUR that day is
+    # likely above the health threshold - stricter than CPCB's 24h-average category, so a
+    # short spike during practice hours counts. worst_case_value/aqi_category are that peak.
     exceedance_flag: bool
     exceedance_probability: float
     worst_case_value: float
@@ -37,8 +40,9 @@ class ExceedanceSummaryOut(BaseModel):
     pollutant: str
     # IANA zone in which each day's `date` is a calendar day (the station's region's zone).
     timezone: str | None = None
-    # When the forecast run behind `days` was generated (null if none ever existed), and whether
-    # it is fresh enough to act on. When is_current is false, `days` is empty and the
+    # The newest observed sensor hour the forecast was made from - i.e. the age of the data behind
+    # `days` (up to MAX_INPUT_STALENESS_HOURS old; CPCB stations typically lag ~12 h). Null if none
+    # ever existed. is_current says whether it is fresh enough to act on. When is_current is false, `days` is empty and the
     # recommendation is no-data.
     forecast_made_at: datetime | None = None
     is_current: bool = False

@@ -5,9 +5,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from api.db import get_db
-from api.routers.forecasts import is_forecast_current
 from api.schemas.current_aqi import CurrentAqiOut, OverallAqiOut, PollutantAqiOut
 from common.aqi import ATTRIBUTION, at_or_above_health_threshold, category_for_sub_index, overall_aqi
+from common.freshness import is_reading_current
 from common.regions import region_for_point
 from db.models import Station, StationAqiSnapshot
 
@@ -38,7 +38,7 @@ def get_current_aqi(station_id: str, db: Session = Depends(get_db)):
     ).scalar_one_or_none()
     if newest is None:
         return CurrentAqiOut(as_of=None, is_current=False, overall=None, pollutants=[], **base)
-    if not is_forecast_current(newest):
+    if not is_reading_current(newest, datetime.now(timezone.utc)):
         # Same rule as forecasts: an old reading is reported as "no current data", never served as current.
         return CurrentAqiOut(as_of=newest, is_current=False, overall=None, pollutants=[], **base)
 

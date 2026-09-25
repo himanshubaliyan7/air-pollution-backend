@@ -251,7 +251,7 @@ def test_only_newest_reading_matters_for_freshness(db_session, monkeypatch, cloc
     sid = add_station(db_session, "a")
     ids = {(sid, Pollutant.PM25): add_model_run(db_session, sid)}
     for h in range(1, 50):
-        add_reading(db_session, sid, NOW_HOUR - timedelta(hours=h + 8))
+        add_reading(db_session, sid, NOW_HOUR - timedelta(hours=h + MAX_INPUT_STALENESS_HOURS + 2))
     monkeypatch.setattr(predict, "forecast", FakePredict(model_ids=ids))
     assert tasks.generate_forecasts()["forecasts_written"] == 0
 
@@ -368,7 +368,7 @@ def test_real_models_end_to_end_idempotent_and_matches_direct_predict(db_session
     assert snapshot() == before
 
 
-def test_real_models_stale_feed_is_skipped_and_boundary_is_six_whole_hours(db_session, trained, monkeypatch):
+def test_real_models_stale_feed_is_skipped_and_boundary_is_inclusive(db_session, trained, monkeypatch):
     _, _, _, newest = trained
     stale_clock = newest + timedelta(hours=MAX_INPUT_STALENESS_HOURS + 1, minutes=5)
     monkeypatch.setattr(tasks, "datetime", fixed_datetime(stale_clock))
@@ -378,4 +378,4 @@ def test_real_models_stale_feed_is_skipped_and_boundary_is_six_whole_hours(db_se
 
     fresh_clock = newest + timedelta(hours=MAX_INPUT_STALENESS_HOURS, minutes=59)
     monkeypatch.setattr(tasks, "datetime", fixed_datetime(fresh_clock))
-    assert tasks.generate_forecasts()["forecasts_written"] == 2  # still fresh at exactly 6 whole hours behind
+    assert tasks.generate_forecasts()["forecasts_written"] == 2  # still fresh at exactly the limit in whole hours behind
