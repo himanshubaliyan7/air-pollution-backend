@@ -83,6 +83,23 @@ def test_second_run_at_same_anchor_upserts_instead_of_duplicating_or_failing(db_
     assert after == {h: 500.0 + h for h in DEFAULT_HORIZONS_HOURS}
 
 
+def test_rerun_after_retrain_replaces_the_old_models_rows(db_session, monkeypatch, clock):
+    """Regression (2026-09-25): after a retrain, a run at an unchanged anchor
+    wrote the new model's rows NEXT TO the old model's (model_id is part of the
+    key), and the outlook took the worst of the two per day."""
+    fake = _setup(db_session, monkeypatch, {"a": NOW_HOUR - timedelta(hours=2)})
+    tasks.generate_forecasts()
+    (key, old_model), = fake.model_ids.items()
+    new_model = add_model_run(db_session, key[0], key[1])
+    fake.model_ids[key] = new_model
+
+    tasks.generate_forecasts()
+
+    rows = _rows(db_session)
+    assert len(rows) == N_H
+    assert {r.model_id for r in rows} == {new_model}
+
+
 def test_upsert_updates_every_value_column_but_not_the_key(db_session, monkeypatch, clock):
     fake = _setup(db_session, monkeypatch, {"a": NOW_HOUR}, flag=False)
     tasks.generate_forecasts()
