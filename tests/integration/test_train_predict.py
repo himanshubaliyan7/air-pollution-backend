@@ -16,7 +16,7 @@ N_HOURS = 400
 HORIZON_HOURS = 24
 
 
-def _seed_full_dataset(db_session):
+def _seed_full_dataset(db_session, level: float = 80.0):
     station_id = "openaq:train-test"
     lat, lon = 28.6, 77.25
     db_session.add(
@@ -44,7 +44,7 @@ def _seed_full_dataset(db_session):
         # A learnable diurnal pattern with noise, so quantile models have
         # actual signal to fit (not pure noise, which would make the
         # holdout classification metrics meaningless for a smoke test).
-        value = 80 + 40 * math.sin(2 * math.pi * (h % 24) / 24) + rng.gauss(0, 5)
+        value = level + 40 * math.sin(2 * math.pi * (h % 24) / 24) + rng.gauss(0, 5)
         value = max(5.0, value)
         db_session.add(
             RawSensorReading(
@@ -145,3 +145,28 @@ def test_predict_returns_none_instead_of_crashing_on_missing_artifact(db_session
         db_session, station_id, Pollutant.PM25, HORIZON_HOURS, as_of_times[-1], station_lat=lat, station_lon=lon
     )
     assert result is None
+
+
+def test_training_on_clean_air_with_no_exceedances_does_not_crash(db_session):
+    """Regression (2026-09-25): undefined F1 (no real and no predicted
+    exceedances in the holdout, i.e. any monsoon holdout) became None and
+    crashed train.py's %.3f log line and promote_if_better's comparison."""
+    station_id, *_rest, as_of_times = _seed_full_dataset(db_session, level=20.0)  # never above 91
+
+    def train():
+        return train_station_pollutant_horizon(
+            db_session, station_id, Pollutant.PM25, HORIZON_HOURS, as_of_times[0], as_of_times[-1], holdout_days=2
+        )
+
+    assert len(train()) == 4
+    # Like production: the incumbent models were trained before undefined F1
+    # became None, so they carry a number that the new None must be compared with.
+    for row in registry.get_active_models(db_session, station_id, Pollutant.PM25, HORIZON_HOURS, ModelType.QUANTILE_REGRESSOR):
+        row.metrics = {**row.metrics, "f1": 0.12}
+    db_session.commit()
+    assert len(train()) == 4
+    median = next(
+        r for r in registry.get_active_models(db_session, station_id, Pollutant.PM25, HORIZON_HOURS, ModelType.QUANTILE_REGRESSOR)
+        if r.quantile == 0.5
+    )
+    assert median.metrics["f1"] == 0.12  # the undefined-F1 candidate (compared as 0.0) did not replace it

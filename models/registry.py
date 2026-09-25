@@ -121,7 +121,7 @@ def promote_if_better(
     active_f1 = None
     for row in currently_active:
         if row.metrics and "f1" in row.metrics:
-            active_f1 = row.metrics["f1"]
+            active_f1 = row.metrics["f1"] if row.metrics["f1"] is not None else 0.0
             break
 
     should_promote = active_f1 is None or candidate_f1 >= active_f1 + min_improvement
