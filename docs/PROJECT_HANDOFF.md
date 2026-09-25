@@ -51,6 +51,15 @@ Everything from the previous "urgent" list (hosting, backups, alerting, CORS, bo
 4. **Cloudflare API token**: only ever held in-session/env, never persisted. Generate a fresh one (dash.cloudflare.com → profile → API Tokens → "Edit Cloudflare Workers" template) whenever a frontend redeploy is needed.
 5. Later/low-priority: multi-region plan (`docs/multi_region_plan.md`), retrain models on accumulated CPCB snapshot history, `/model-health` public-exposure decision, decide when (if ever) to fully tear down the local Windows stack or the dormant Lovable project.
 
+## 6a. Forecast coverage + model backtest (2026-09-25)
+- **Why most stations are `no-data`**: 68 of 85 stations DO have OpenAQ PM2.5 data, but it arrives about 12 h late (CPCB via OpenAQ), and `MAX_INPUT_STALENESS_HOURS` = 6 rejects it. Only 7 stations are under 6 h.
+- **Backtest** (`scripts/backtest_models.py`, read-only; test window 2026-08-22..09-24, 70 stations, monsoon so few exceedances). The production rule (P(PM2.5 > 91) >= 0.3) has hourly recall 0.32 / precision 0.18 at 24 h, falling to about 0.2 at 72-120 h. It beats persistence (0.14 / 0.14) at every horizon. Per local day (any hour > 91): recall 0.16-0.31, precision 0.26-0.47. MAE is similar to persistence at 24-48 h and better at 96-120 h. A 24 h rolling mean beats it at 24-72 h.
+- **Staleness costs little**: rule recall is 0.32 at 24 h vs 0.30 at 48 h, so a 12-24 h older anchor loses little skill.
+- **The 0.07 recall stored in `model_runs.metrics` is misleading**: it is an unweighted average of per-station recalls, with 0.0 for stations whose holdout had no exceedances (same `zero_division` issue as the drift alarm). Pooled recall is about 0.3.
+- **Threshold semantics**: CPCB's "Poor" band is a 24 h AVERAGE >= 91, but the flag fires on any HOURLY value > 91. Only 1-7 station-days in the test window had a 24 h mean > 91, vs 55-81 with an hourly spike.
+- **36 active models (8 PM2.5 station-horizons at 4 stations, plus 12 classifiers) point to `D:\...` artifact paths from PC training.** Those files were never copied to the server (all 36 still exist locally), so those forecasts are silently skipped.
+- The models were trained on Mar-Sep data only and have never seen a Delhi winter.
+
 ## 7. Operating notes
 - **Server access**: `ssh air-pollution-backend` (or `ssh ubuntu@137.23.49.72`) — owner's own key works independently of any Claude session. Repo is cloned at `~/air-pollution-backend` on the server; `git config core.fileMode false` is set there (a pulled script's `+x` bit otherwise blocks the next `git pull`). Secrets live only in the server's `docker/.env` (never committed, never printed). A read-only GitHub deploy key is registered on the backend repo for the server to `git pull` with.
 - **Deploying a backend code change**: commit + push locally, then on the server `git pull && cd docker && sudo docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --force-recreate --build <service>` (omit `--build` if no Dockerfile/dependency change). `dashboard` and `mailhog` are deliberately left out of the prod service list.
