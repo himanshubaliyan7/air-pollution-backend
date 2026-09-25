@@ -65,9 +65,9 @@ def send_confirmation_email(email: str, token: str) -> bool:
     return send_message(
         _link_email(
             to=email,
-            subject="Confirm your air quality alert subscription",
-            intro="Someone (hopefully you) asked to receive Delhi NCR air quality alerts at this address. "
-            "Open this link to confirm the subscription:",
+            subject="Confirm your daily outdoor-practice email",
+            intro="Someone (hopefully you) asked to receive a daily air-quality outlook for outdoor "
+            "practice at this address. Open this link to confirm:",
             link=confirm_link(token, settings),
             outro="If you did not request this, ignore this email: nothing will be sent to you unless you confirm.",
             ttl_hours=settings.subscription_token_ttl_hours,
@@ -80,10 +80,10 @@ def send_manage_email(email: str, token: str) -> bool:
     return send_message(
         _link_email(
             to=email,
-            subject="Manage your air quality alert subscription",
-            intro="Someone (hopefully you) asked to sign up this address for air quality alerts, "
-            "but it already has a subscription. Open this link to change the stations and pollutants, "
-            "or to stop the alerts:",
+            subject="Change your daily outdoor-practice email",
+            intro="Someone (hopefully you) asked to sign up this address for the daily air-quality "
+            "outlook, but it is already subscribed. Open this link to change the stations and "
+            "pollutants, or to stop the email:",
             link=manage_link(token, settings),
             outro="If you did not request this, ignore this email: your subscription has not been changed.",
             ttl_hours=settings.subscription_token_ttl_hours,
