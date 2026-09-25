@@ -73,9 +73,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    from db.models import DigestLog
-
-    DigestLog.__table__.drop(bind=op.get_bind(), checkfirst=True)
+    # op.drop_table, not DigestLog.__table__.drop: the latter also drops the
+    # alert_status enum type, which alert_log still uses.
+    op.drop_table("digest_log")
     op.drop_constraint("alert_subscriptions_manage_token_hash_key", _TABLE, type_="unique")
     op.drop_constraint("alert_subscriptions_confirm_token_hash_key", _TABLE, type_="unique")
     # Pending (unconfirmed) rows are inactive, so they simply become inactive

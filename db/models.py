@@ -303,7 +303,7 @@ class DigestLog(Base):
     subscriber_id = Column(UUID(as_uuid=True), ForeignKey("alert_subscriptions.subscriber_id"), nullable=False)
     digest_date = Column(Date, nullable=False)  # the local day the digest is about
     sent_at = Column(DateTime(timezone=True), nullable=False)
-    status = Column(Enum(AlertStatus, name="alert_status", create_type=False), nullable=False)
+    status = Column(Enum(AlertStatus, name="alert_status"), nullable=False)  # type shared with alert_log
     error_detail = Column(Text, nullable=True)
 
     __table_args__ = (UniqueConstraint("subscriber_id", "digest_date", name="uq_digest_log_subscriber_day"),)
