@@ -2,14 +2,15 @@
 # forecast concentration (or exceedance probability) into an AQI category
 # and a go/caution/no-go recommendation.
 #
-# VERIFICATION STATUS (checked 2026-09-20):
+# VERIFICATION STATUS (verified 2026-09-25 against the OFFICIAL source):
 # Every PM2.5 and NO2 category boundary below (AQI ranges and concentration
-# ranges, 24-hour averaging) matches the Indian AQI table published by
-# aqihub.info/indices/india, and CPCB's own anchor points (PM2.5 sub-index 51
-# at 31 ug/m3, 100 at 60 ug/m3) agree. That is a SECONDARY source: the
-# official CPCB documents (cpcb.nic.in -> cpcb.gov.in) could not be fetched
-# because cpcb.gov.in served an expired TLS certificate. Re-check against the
-# official "About National Air Quality Index" PDF when it is reachable.
+# ranges, 24-hour averaging) matches the table in CPCB's "About National Air
+# Quality Index" PDF, fetched from cpcb.gov.in
+# (displaypdf.php?id=bmF0aW9uYWwtYWlyLXF1YWxpdHktaW5kZXgvQWJvdXRfQVFJLnBkZg==),
+# including its anchor points (PM2.5 sub-index 51 at 31 ug/m3, 100 at 60 ug/m3).
+# Earlier (2026-09-20) only a secondary source (aqihub.info) could be checked.
+# CPCB's ranges are integers with gaps (90 -> 91); models/exceedance.py treats
+# each band as running from its lower bound up to the next band's.
 # The "severe" upper concentration bounds (380 for pm25, 600 for no2) are NOT
 # from the table (which lists them open-ended, "250+" / "400+"); they are only
 # a cap for interpolating a sub-index and do not affect the go/no-go category.
