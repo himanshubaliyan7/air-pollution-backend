@@ -6,7 +6,6 @@ logging, so the DAG files themselves stay declarative.
 """
 
 import logging
-import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
@@ -33,8 +32,8 @@ from ingestion.sources.data_gov_in import DataGovInClient
 from ingestion.weather.era5_client import ERA5Client
 from ingestion.weather.grid import DELHI_NCR_AREA
 from ingestion.weather.open_meteo_client import OpenMeteoClient
-from alerting.notifier import send_exceedance_alert
-from alerting.subscriber_store import find_subscribers
+from alerting.digest import send_daily_digests
+from alerting.retention import purge_subscriptions
 from models import evaluation, exceedance, predict, registry, train
 
 logger = logging.getLogger(__name__)
@@ -467,40 +466,20 @@ def evaluate_recent_forecasts(evaluation_window_days: int = 1) -> int:
 
 # -------------------------------------------------------------------- alerts
 
-def trigger_alerts_for_crossings(new_crossings: list[dict]) -> int:
-    """Takes generate_forecasts()'s new_crossings (JSON-safe dicts, e.g. from
-    an Airflow XCom pull) and emails every matching active subscriber."""
-    if not new_crossings:
-        return 0
-
+def send_daily_digest() -> dict[str, int]:
+    """alert_digest_dag: tomorrow's outlook to every confirmed subscriber."""
     session = get_session()
     try:
-        thresholds = exceedance.load_thresholds()
-        sent = 0
-        for crossing in new_crossings:
-            pollutant = crossing["pollutant"]
-            subscribers = find_subscribers(session, crossing["station_id"], pollutant)
-            if not subscribers:
-                continue
+        return send_daily_digests(session, datetime.now(timezone.utc))
+    finally:
+        session.close()
 
-            aqi_category = exceedance.get_aqi_category(thresholds, Pollutant(pollutant), crossing["quantile_high"])
-            for subscriber in subscribers:
-                sent += int(
-                    send_exceedance_alert(
-                        session,
-                        subscriber,
-                        station_id=crossing["station_id"],
-                        station_name=crossing["station_name"],
-                        pollutant=pollutant,
-                        aqi_category=aqi_category,
-                        forecast_value=crossing["quantile_high"],
-                        model_id=uuid.UUID(crossing["model_id"]),
-                        forecast_made_at=datetime.fromisoformat(crossing["forecast_made_at"]),
-                        target_time=datetime.fromisoformat(crossing["target_time"]),
-                        dashboard_url=get_settings().dashboard_url,
-                    )
-                )
-        return sent
+
+def purge_stale_subscriptions() -> dict[str, int]:
+    """station_maintenance_dag: retention rules in alerting/retention.py."""
+    session = get_session()
+    try:
+        return purge_subscriptions(session, datetime.now(timezone.utc))
     finally:
         session.close()
 

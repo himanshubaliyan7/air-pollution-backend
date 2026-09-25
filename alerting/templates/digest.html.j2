@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<body style="font-family: sans-serif; color:#1f2328;">
+  <h2 style="margin-bottom:4px;">Outdoor practice outlook</h2>
+  <p style="margin-top:0; color:#57606a;">Forecast for your stations, starting tomorrow.</p>
+  {% set colours = {"no-go": "#cf222e", "caution": "#9a6700", "no-data": "#57606a", "go": "#1a7f37"} %}
+  <table cellpadding="6" style="border-collapse:collapse; font-size:14px;">
+    <tr style="text-align:left; border-bottom:1px solid #d0d7de;">
+      <th>Station</th><th>Pollutant</th>
+      {% for d in day_labels %}<th>{{ d }}</th>{% endfor %}
+      <th style="color:#57606a; font-weight:normal;">Data as of</th>
+    </tr>
+    {% for r in rows %}
+    <tr style="border-bottom:1px solid #eaeef2;">
+      <td>{{ r.station_name }}</td><td>{{ r.pollutant }}</td>
+      {% for v in r.verdicts %}<td style="color:{{ colours[v] }}; font-weight:bold;">{{ labels[v] }}</td>{% endfor %}
+      <td style="color:#57606a;">{{ r.data_as_of or "none" }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p style="font-size:13px;">
+    <b>Go</b>: no health-threshold exceedance expected. <b>Caution</b>: a real chance of one.
+    <b>No-go</b>: outdoor practice not recommended.
+    <b>No data</b>: there is no reliable forecast - do not treat it as safe.
+  </p>
+  <p style="font-size:13px;">Forecasts are estimates and can miss short spikes. <a href="{{ site_url }}">See the full forecast</a>.</p>
+  <p style="color:#57606a; font-size:12px;">
+    You receive this daily because this address confirmed a subscription.
+    To change stations, <a href="{{ manage_request_url }}">request a manage link</a>.
+    <a href="{{ unsubscribe_url }}">Unsubscribe</a>
+  </p>
+</body>
+</html>
