@@ -195,6 +195,16 @@ class ExceedanceEvaluation(Base):
 
 
 class AlertSubscription(Base):
+    """One row per email address (owner-verified double opt-in).
+
+    Alerts go only to rows that are BOTH is_confirmed and is_active. A row
+    starts pending (is_confirmed=False, is_active=False) and only the emailed
+    confirm token activates it. is_confirmed records that the address owner
+    proved control of the mailbox and never goes back to False; unsubscribing
+    only flips is_active. Emailed tokens (confirm, manage) are stored solely as
+    SHA-256 hashes; see alerting/tokens.py.
+    """
+
     __tablename__ = "alert_subscriptions"
 
     subscriber_id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
@@ -203,6 +213,19 @@ class AlertSubscription(Base):
     pollutants = Column(ARRAY(String), nullable=False)
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), nullable=False)
+
+    is_confirmed = Column(Boolean, nullable=False, default=False, server_default="false")
+    confirmed_at = Column(DateTime(timezone=True), nullable=True)
+    # Single-use; cleared on confirmation.
+    confirm_token_hash = Column(String, nullable=True, unique=True)
+    confirm_token_expires_at = Column(DateTime(timezone=True), nullable=True)
+    # Multi-use until expiry; lets the confirmed owner change or stop the subscription.
+    manage_token_hash = Column(String, nullable=True, unique=True)
+    manage_token_expires_at = Column(DateTime(timezone=True), nullable=True)
+    # Per-email rate limit for confirm/manage emails: count within the window
+    # that began at email_window_started_at.
+    email_window_started_at = Column(DateTime(timezone=True), nullable=True)
+    email_send_count = Column(Integer, nullable=False, default=0, server_default="0")
 
     alert_log_entries = relationship("AlertLog", back_populates="subscriber")
 

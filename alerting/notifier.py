@@ -9,16 +9,15 @@ the pre-check below racing.
 """
 
 import logging
-import smtplib
 import uuid
 from datetime import datetime, timezone
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from alerting.mailer import build_message, send_message
+from alerting.tokens import make_unsubscribe_token, one_click_unsubscribe_url, unsubscribe_page_link
 from common.config import REPO_ROOT, get_settings, to_ist
 from db.models import AlertLog, AlertSubscription
 
@@ -62,33 +61,34 @@ def send_exceedance_alert(
         return False
 
     settings = get_settings()
-    template = _env.get_template("exceedance_alert.html.j2")
-    html = template.render(
+    unsubscribe_token = make_unsubscribe_token(subscriber.subscriber_id, settings)
+    context = dict(
         station_name=station_name,
         pollutant=pollutant.upper(),
         target_date=to_ist(target_time).date().isoformat(),
         forecast_value=round(forecast_value, 1),
         aqi_category=aqi_category.replace("_", " ").title(),
         dashboard_url=dashboard_url,
+        unsubscribe_url=unsubscribe_page_link(unsubscribe_token, settings),
     )
+    html = _env.get_template("exceedance_alert.html.j2").render(**context)
+    text = _env.get_template("exceedance_alert.txt").render(**context)
 
     status = "sent"
     error_detail = None
     try:
-        if settings.smtp_host:
-            msg = MIMEMultipart("alternative")
-            msg["Subject"] = f"Air quality alert: {station_name} ({pollutant.upper()})"
-            msg["From"] = settings.alert_from_address
-            msg["To"] = subscriber.email
-            msg.attach(MIMEText(html, "html"))
-
-            with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=15) as smtp:
-                if settings.smtp_user:
-                    smtp.starttls()
-                    smtp.login(settings.smtp_user, settings.smtp_password)
-                smtp.sendmail(settings.alert_from_address, [subscriber.email], msg.as_string())
-        else:
-            logger.warning("SMTP_HOST not configured - logging alert instead of sending: %s -> %s", station_name, subscriber.email)
+        msg = build_message(
+            to=subscriber.email,
+            subject=f"Air quality alert: {station_name} ({pollutant.upper()})",
+            text=text,
+            html_body=html,
+            # RFC 8058 one-click unsubscribe: the mail provider POSTs to this URL.
+            extra_headers={
+                "List-Unsubscribe": f"<{one_click_unsubscribe_url(unsubscribe_token, settings)}>",
+                "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+            },
+        )
+        send_message(msg)  # logs and skips when SMTP_HOST is unset (dev)
     except Exception as exc:  # noqa: BLE001 - recorded, not swallowed silently
         status = "failed"
         error_detail = str(exc)

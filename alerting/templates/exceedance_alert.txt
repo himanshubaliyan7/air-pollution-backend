@@ -1,0 +1,10 @@
+Air quality alert: {{ station_name }}
+
+The forecast for {{ pollutant }} at {{ station_name }} now crosses the health threshold on {{ target_date }} (forecast value: {{ forecast_value }} ug/m3, category: {{ aqi_category }}).
+
+Outdoor practice is not recommended that day.
+
+View the full forecast: {{ dashboard_url }}
+
+You receive this because this address subscribed to air quality alerts.
+Unsubscribe: {{ unsubscribe_url }}
