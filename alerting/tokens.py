@@ -42,7 +42,13 @@ def expiry_from(now: datetime, settings: Settings | None = None) -> datetime:
 
 
 def _key(settings: Settings) -> bytes:
-    secret = settings.subscription_token_secret or f"derived-from-database-url:{settings.database_url}"
+    # No fallback: a key derived from another setting (the draft used the
+    # database URL) silently changes - and invalidates every unsubscribe link
+    # already emailed - whenever that setting changes, and ties link security
+    # to a secret with a different purpose. Unset means alerts cannot be sent.
+    secret = settings.subscription_token_secret
+    if not secret:
+        raise RuntimeError("SUBSCRIPTION_TOKEN_SECRET is not set - cannot build or check unsubscribe links")
     return hashlib.sha256(b"alert-unsubscribe-token-v1\0" + secret.encode("utf-8")).digest()
 
 

@@ -53,8 +53,9 @@ class Settings(BaseSettings):
     subscription_emails_per_hour: int = 3
     # Key for the stateless per-subscriber unsubscribe token embedded in alert
     # emails (they must work indefinitely, and the plaintext cannot be
-    # recovered from a stored hash). Empty derives a key from database_url,
-    # which every service already shares and which contains the DB password.
+    # recovered from a stored hash). Required to send or check them; generate
+    # once with `python -c "import secrets; print(secrets.token_urlsafe(48))"`
+    # and never rotate casually (rotation breaks every emailed link).
     subscription_token_secret: str = ""
 
     openaq_api_key: str = ""

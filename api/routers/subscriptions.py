@@ -14,7 +14,7 @@ from urllib.parse import parse_qs
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from sqlalchemy import case, or_, select, update
+from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -26,6 +26,7 @@ from alerting.tokens import (
     new_token,
     parse_unsubscribe_token,
 )
+from alerting.retention import erase_subscriber
 from api.db import get_db
 from api.schemas.subscriptions import (
     ManageIn,
@@ -214,6 +215,7 @@ def manage_subscription(payload: ManageIn, db: Session = Depends(get_db)):
             station_ids=payload.station_ids,
             pollutants=[p.value for p in payload.pollutants],
             is_active=True,
+            unsubscribed_at=None,
         )
         .returning(AlertSubscription.subscriber_id)
     ).scalar_one_or_none()
@@ -224,22 +226,35 @@ def manage_subscription(payload: ManageIn, db: Session = Depends(get_db)):
     return SubscriptionStatusOut(status="updated")
 
 
-def _unsubscribe(db: Session, token: str, now: datetime) -> bool:
-    """Accepts either the stateless unsubscribe token from an alert email or an
-    emailed manage token. Idempotent; can only ever switch a subscription off."""
+def _owner_condition(token: str, now: datetime):
+    """SQL condition matching the confirmed subscription `token` authorises:
+    the stateless unsubscribe token from an alert email, or an emailed manage
+    token. None when the token cannot be valid."""
     if is_unsubscribe_token(token):
         subscriber_id = parse_unsubscribe_token(token)
         if subscriber_id is None:
-            return False
+            return None
         condition = AlertSubscription.subscriber_id == subscriber_id
     else:
         condition = (
             AlertSubscription.manage_token_hash == hash_token(token)
         ) & (AlertSubscription.manage_token_expires_at > now)
+    return condition & AlertSubscription.is_confirmed.is_(True)
+
+
+def _unsubscribe(db: Session, token: str, now: datetime) -> bool:
+    """Idempotent; can only ever switch a subscription off."""
+    condition = _owner_condition(token, now)
+    if condition is None:
+        return False
     row = db.execute(
         update(AlertSubscription)
-        .where(condition, AlertSubscription.is_confirmed.is_(True))
-        .values(is_active=False)
+        .where(condition)
+        .values(
+            is_active=False,
+            # Keep the first unsubscribe time on repeats: it starts the retention clock.
+            unsubscribed_at=func.coalesce(AlertSubscription.unsubscribed_at, now),
+        )
         .returning(AlertSubscription.subscriber_id)
     ).scalar_one_or_none()
     if row is None:
@@ -254,6 +269,22 @@ def unsubscribe(payload: TokenIn, db: Session = Depends(get_db)):
     if not _unsubscribe(db, payload.token, utc_now()):
         raise HTTPException(status_code=400, detail=_INVALID_TOKEN)
     return SubscriptionStatusOut(status="unsubscribed")
+
+
+@router.post("/delete", response_model=SubscriptionStatusOut)
+def delete_subscription(payload: TokenIn, db: Session = Depends(get_db)):
+    """Erase the subscription and its send history ("delete my data"). Same
+    tokens as unsubscribing. Irreversible; subscribing again starts over."""
+    condition = _owner_condition(payload.token, utc_now())
+    subscriber_id = (
+        db.execute(select(AlertSubscription.subscriber_id).where(condition)).scalar_one_or_none()
+        if condition is not None else None
+    )
+    if subscriber_id is None:
+        raise HTTPException(status_code=400, detail=_INVALID_TOKEN)
+    erase_subscriber(db, subscriber_id)
+    db.commit()
+    return SubscriptionStatusOut(status="deleted")
 
 
 @router.post("/unsubscribe/one-click", response_model=SubscriptionStatusOut)
