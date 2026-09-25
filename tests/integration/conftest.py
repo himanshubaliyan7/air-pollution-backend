@@ -62,6 +62,7 @@ def db_session(db_engine):
 
 
 _APP_TABLES = [
+    "digest_log",
     "alert_log",
     "alert_subscriptions",
     "exceedance_evaluations",

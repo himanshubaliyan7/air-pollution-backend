@@ -24,6 +24,7 @@ COPY db ./db
 COPY ingestion ./ingestion
 COPY features ./features
 COPY models ./models
+COPY alerting ./alerting
 COPY api ./api
 
 USER app

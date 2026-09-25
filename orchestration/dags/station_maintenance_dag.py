@@ -1,6 +1,7 @@
 """Daily: deactivate stations OpenAQ reports as dark for 30+ days (and
 reactivate any that resume), so hourly ingestion stops spending API quota on
-them. See tasks.refresh_station_activity.
+them (tasks.refresh_station_activity); and apply the subscriber-data retention
+rules (tasks.purge_stale_subscriptions).
 """
 
 from datetime import datetime, timedelta
@@ -10,7 +11,7 @@ from airflow.operators.python import PythonOperator
 
 from orchestration.plugins.common.alerts import notify_task_failure
 
-from orchestration.plugins.common.tasks import refresh_station_activity
+from orchestration.plugins.common.tasks import purge_stale_subscriptions, refresh_station_activity
 
 default_args = {"owner": "air-pollution-prediction", "on_failure_callback": notify_task_failure, "retries": 2, "retry_delay": timedelta(minutes=10)}
 
@@ -24,3 +25,4 @@ with DAG(
     tags=["maintenance"],
 ) as dag:
     PythonOperator(task_id="refresh_station_activity", python_callable=refresh_station_activity)
+    PythonOperator(task_id="purge_stale_subscriptions", python_callable=purge_stale_subscriptions)

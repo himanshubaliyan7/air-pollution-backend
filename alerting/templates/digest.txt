@@ -1,0 +1,14 @@
+Outdoor practice outlook - forecast for your stations, starting tomorrow.
+{% for r in rows %}
+{{ r.station_name }} ({{ r.pollutant }}){% if r.data_as_of %} - data as of {{ r.data_as_of }}{% endif %}
+{% for v in r.verdicts %}  {{ day_labels[loop.index0] }}: {{ labels[v] }}
+{% endfor %}{% endfor %}
+Go: no health-threshold exceedance expected. Caution: a real chance of one.
+No-go: outdoor practice not recommended.
+No data: there is no reliable forecast - do not treat it as safe.
+
+Forecasts are estimates and can miss short spikes. Full forecast: {{ site_url }}
+
+You receive this daily because this address confirmed a subscription.
+To change stations, request a manage link: {{ manage_request_url }}
+Unsubscribe: {{ unsubscribe_url }}

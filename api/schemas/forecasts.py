@@ -26,9 +26,10 @@ class ForecastSeriesOut(BaseModel):
 
 class ExceedanceDayOut(BaseModel):
     date: date
-    # Hourly-peak rule (owner decision 2026-09-25): true when a forecast HOUR that day is
-    # likely above the health threshold - stricter than CPCB's 24h-average category, so a
-    # short spike during practice hours counts. worst_case_value/aqi_category are that peak.
+    # Hourly rule (owner decision 2026-09-25: hourly values, not CPCB's 24h average). Each day
+    # is represented by ONE forecast hour - the run's anchor hour + N x 24 h - so this is true
+    # when that hour is likely above the health threshold; worst_case_value/aqi_category are its
+    # upper quantile. Other hours of the day are not forecast (see docs/PROJECT_HANDOFF.md).
     exceedance_flag: bool
     exceedance_probability: float
     worst_case_value: float

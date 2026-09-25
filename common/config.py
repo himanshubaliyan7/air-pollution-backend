@@ -36,6 +36,28 @@ class Settings(BaseSettings):
     # set for real deployments: recipients cannot open the localhost default.
     dashboard_url: str = "http://localhost:8501"
 
+    # --- alert subscriptions (owner-verified double opt-in) ---
+    # Public base URL of the frontend that hosts the confirm / manage /
+    # unsubscribe pages linked from emails (<base>/subscriptions/confirm?token=...).
+    # Empty means "use dashboard_url". Must be a real, recipient-reachable URL
+    # in any deployment.
+    frontend_base_url: str = ""
+    # Public base URL of THIS API, used for the RFC 8058 one-click unsubscribe
+    # URL in alert emails (mail providers POST to it directly, so it must be
+    # the API and must be https in production). api_base_url is the internal
+    # docker-network address and is useless to a mail provider.
+    public_api_base_url: str = "http://localhost:8000"
+    # Lifetime of emailed confirm / manage tokens.
+    subscription_token_ttl_hours: int = 48
+    # Max confirmation/manage emails sent to one address per rolling hour-window.
+    subscription_emails_per_hour: int = 3
+    # Key for the stateless per-subscriber unsubscribe token embedded in alert
+    # emails (they must work indefinitely, and the plaintext cannot be
+    # recovered from a stored hash). Required to send or check them; generate
+    # once with `python -c "import secrets; print(secrets.token_urlsafe(48))"`
+    # and never rotate casually (rotation breaks every emailed link).
+    subscription_token_secret: str = ""
+
     openaq_api_key: str = ""
     # Free personal key from data.gov.in (My Account). Empty = current-AQI ingestion is skipped.
     data_gov_in_api_key: str = ""

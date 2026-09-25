@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_api_app_imports_without_requests_installed():
-    blocked = ["requests", "xarray", "cdsapi", "airflow"]  # installed locally, absent from the API image
+    blocked = ["requests", "xarray", "cdsapi", "airflow", "jinja2"]  # installed locally, absent from the API image
     code = f"import sys; [sys.modules.__setitem__(m, None) for m in {blocked!r}]; import api.main; print('ok')"
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0 and "ok" in result.stdout, result.stderr[-1500:]
