@@ -17,19 +17,23 @@ def _evaluate_and_check_drift(**_):
 
     from db.models import ExceedanceEvaluation
     from db.session import get_session
+    from models.evaluation import recall_drift_detected
 
     written = evaluate_recent_forecasts()
 
     session = get_session()
     try:
         recent = session.execute(
-            select(ExceedanceEvaluation.recall).order_by(ExceedanceEvaluation.computed_at.desc()).limit(20)
+            select(ExceedanceEvaluation.recall)
+            .where(ExceedanceEvaluation.recall.is_not(None))
+            .order_by(ExceedanceEvaluation.computed_at.desc())
+            .limit(20)
         ).scalars().all()
     finally:
         session.close()
 
-    low_recall = [r for r in recent if r is not None and r < MIN_RECALL]
-    if recent and len(low_recall) > len(recent) / 2:
+    if recall_drift_detected(recent, MIN_RECALL):
+        low_recall = [r for r in recent if r < MIN_RECALL]
         # Intentionally just a loud log/task-failure (surfaces in Airflow's
         # own alerting) rather than the school-facing alerting/ path - this
         # is a maintainer-facing model-drift signal, not a health alert.

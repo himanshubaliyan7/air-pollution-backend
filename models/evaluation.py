@@ -18,13 +18,26 @@ def regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
 
 
 def exceedance_classification_metrics(y_true_binary: np.ndarray, y_pred_binary: np.ndarray) -> dict:
+    """Undefined metrics are None, not 0: a window with no real exceedances
+    has no recall to measure, and scoring it 0.0 made every clean-air day
+    look like total model failure to the drift check."""
+    n_actual = int(np.sum(y_true_binary))
+    n_predicted = int(np.sum(y_pred_binary))
     return {
-        "precision": float(precision_score(y_true_binary, y_pred_binary, zero_division=0)),
-        "recall": float(recall_score(y_true_binary, y_pred_binary, zero_division=0)),
-        "f1": float(f1_score(y_true_binary, y_pred_binary, zero_division=0)),
-        "n_exceedance_days_actual": int(np.sum(y_true_binary)),
-        "n_exceedance_days_predicted": int(np.sum(y_pred_binary)),
+        "precision": float(precision_score(y_true_binary, y_pred_binary, zero_division=0)) if n_predicted else None,
+        "recall": float(recall_score(y_true_binary, y_pred_binary, zero_division=0)) if n_actual else None,
+        "f1": float(f1_score(y_true_binary, y_pred_binary, zero_division=0)) if n_actual or n_predicted else None,
+        "n_exceedance_days_actual": n_actual,
+        "n_exceedance_days_predicted": n_predicted,
     }
+
+
+def recall_drift_detected(recalls: list, min_recall: float) -> bool:
+    """True when most recent evaluations that could measure recall fall
+    below min_recall. Evaluations with undefined recall (None) are ignored."""
+    defined = [r for r in recalls if r is not None]
+    low = [r for r in defined if r < min_recall]
+    return bool(defined) and len(low) > len(defined) / 2
 
 
 def pinball_loss(y_true: np.ndarray, y_pred: np.ndarray, quantile: float) -> float:
