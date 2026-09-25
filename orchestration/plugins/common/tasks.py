@@ -9,7 +9,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from common.config import get_settings
@@ -353,6 +353,19 @@ def generate_forecasts() -> dict:
                             index_elements=["station_id", "pollutant", "model_id", "forecast_made_at", "target_time"],
                             set_={k: v for k, v in values.items()
                                   if k not in ("station_id", "pollutant", "model_id", "forecast_made_at", "target_time")},
+                        )
+                    )
+                    # A run REPLACES this target's forecast. model_id is part
+                    # of the key, so after a retrain an unchanged anchor would
+                    # otherwise keep the old model's row next to the new one,
+                    # and the outlook (max probability per day) would mix them.
+                    session.execute(
+                        delete(Forecast).where(
+                            Forecast.station_id == station.station_id,
+                            Forecast.pollutant == pollutant,
+                            Forecast.forecast_made_at == as_of,
+                            Forecast.target_time == target_time,
+                            Forecast.model_id != result.model_id,
                         )
                     )
                     written += 1
