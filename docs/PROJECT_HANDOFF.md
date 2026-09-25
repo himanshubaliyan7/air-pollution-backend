@@ -57,7 +57,7 @@ Everything from the previous "urgent" list (hosting, backups, alerting, CORS, bo
 - **Staleness costs little**: rule recall is 0.32 at 24 h vs 0.30 at 48 h, so a 12-24 h older anchor loses little skill.
 - **The 0.07 recall stored in `model_runs.metrics` is misleading**: it is an unweighted average of per-station recalls, with 0.0 for stations whose holdout had no exceedances (same `zero_division` issue as the drift alarm). Pooled recall is about 0.3.
 - **Threshold semantics**: CPCB's "Poor" band is a 24 h AVERAGE >= 91, but the flag fires on any HOURLY value > 91. Only 1-7 station-days in the test window had a 24 h mean > 91, vs 55-81 with an hourly spike.
-- **36 active models (8 PM2.5 station-horizons at 4 stations, plus 12 classifiers) point to `D:\...` artifact paths from PC training.** Those files were never copied to the server (all 36 still exist locally), so those forecasts are silently skipped.
+- **36 active models (8 PM2.5 station-horizons at 4 stations, plus 12 classifiers) point to `D:\...` artifact paths from PC training.** FIXED 2026-09-25: the 36 files were copied into the `docker_model_artifacts` volume and their paths updated. The old paths are backed up in `~/model_paths_backup_20260925.csv` on the server. All 36 load, and `predict.forecast` works for the 4 affected stations. The 1,924 inactive rows still have `D:` paths, but they are never loaded.
 - The models were trained on Mar-Sep data only and have never seen a Delhi winter.
 
 ## 7. Operating notes
