@@ -506,9 +506,9 @@
         "tags": [
           "subscriptions"
         ],
-        "summary": "Create Subscription",
-        "description": "Creates a subscription for a NEW email only.\n\nDeliberately never modifies, reactivates or reveals an existing row: with\nno proof of email ownership, an upsert would let anyone overwrite a\nvictim's stations and read back their subscriber_id (the only credential\nfor DELETE). A 409 is returned instead. Changing or re-enabling a\nsubscription needs an owner-verified flow (emailed confirmation token),\nwhich is not built yet.",
-        "operationId": "create_subscription_api_v1_subscriptions_post",
+        "summary": "Request Subscription",
+        "description": "Ask to subscribe. Always answers the same 202 body (no subscriber id, no\nhint whether the address is already known). Emails a confirmation link for\na new/pending address, or a manage link for a confirmed one; nothing is\nactivated or modified until the mailbox owner uses a link.",
+        "operationId": "request_subscription_api_v1_subscriptions_post",
         "requestBody": {
           "content": {
             "application/json": {
@@ -520,12 +520,12 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SubscriptionOut"
+                  "$ref": "#/components/schemas/SubscriptionRequestOut"
                 }
               }
             }
@@ -543,22 +543,189 @@
         }
       }
     },
-    "/api/v1/subscriptions/{subscriber_id}": {
-      "delete": {
+    "/api/v1/subscriptions/confirm": {
+      "post": {
+        "tags": [
+          "subscriptions"
+        ],
+        "summary": "Confirm Subscription",
+        "description": "Single-use: the token is erased from the row the moment it works.",
+        "operationId": "confirm_subscription_api_v1_subscriptions_confirm_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionStatusOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/subscriptions/manage": {
+      "post": {
+        "tags": [
+          "subscriptions"
+        ],
+        "summary": "Manage Subscription",
+        "description": "Replace the stations/pollutants of a confirmed subscription (and switch\nit on, which is how someone who unsubscribed re-subscribes). Authorised\nonly by the emailed manage token.",
+        "operationId": "manage_subscription_api_v1_subscriptions_manage_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManageIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionStatusOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/subscriptions/unsubscribe": {
+      "post": {
         "tags": [
           "subscriptions"
         ],
         "summary": "Unsubscribe",
-        "operationId": "unsubscribe_api_v1_subscriptions__subscriber_id__delete",
+        "operationId": "unsubscribe_api_v1_subscriptions_unsubscribe_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionStatusOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/subscriptions/delete": {
+      "post": {
+        "tags": [
+          "subscriptions"
+        ],
+        "summary": "Delete Subscription",
+        "description": "Erase the subscription and its send history (\"delete my data\"). Same\ntokens as unsubscribing. Irreversible; subscribing again starts over.",
+        "operationId": "delete_subscription_api_v1_subscriptions_delete_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionStatusOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/subscriptions/unsubscribe/one-click": {
+      "post": {
+        "tags": [
+          "subscriptions"
+        ],
+        "summary": "Unsubscribe One Click",
+        "description": "RFC 8058 target of the List-Unsubscribe header: the mail provider POSTs\n`List-Unsubscribe=One-Click` (form-encoded) with no user interaction.",
+        "operationId": "unsubscribe_one_click_api_v1_subscriptions_unsubscribe_one_click_post",
         "parameters": [
           {
-            "name": "subscriber_id",
-            "in": "path",
+            "name": "token",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string",
-              "format": "uuid",
-              "title": "Subscriber Id"
+              "title": "Token"
             }
           }
         ],
@@ -568,7 +735,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SubscriptionOut"
+                  "$ref": "#/components/schemas/SubscriptionStatusOut"
                 }
               }
             }
@@ -1033,6 +1200,43 @@
         ],
         "title": "HistoryPointOut"
       },
+      "ManageIn": {
+        "properties": {
+          "station_ids": {
+            "items": {
+              "type": "string",
+              "maxLength": 64,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 10,
+            "minItems": 1,
+            "title": "Station Ids"
+          },
+          "pollutants": {
+            "items": {
+              "$ref": "#/components/schemas/Pollutant"
+            },
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 1,
+            "title": "Pollutants"
+          },
+          "token": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Token"
+          }
+        },
+        "type": "object",
+        "required": [
+          "station_ids",
+          "pollutants",
+          "token"
+        ],
+        "title": "ManageIn"
+      },
       "ModelHealthOut": {
         "properties": {
           "station_id": {
@@ -1470,11 +1674,6 @@
       },
       "SubscriptionIn": {
         "properties": {
-          "email": {
-            "type": "string",
-            "format": "email",
-            "title": "Email"
-          },
           "station_ids": {
             "items": {
               "type": "string",
@@ -1494,23 +1693,40 @@
             "maxItems": 2,
             "minItems": 1,
             "title": "Pollutants"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Email"
           }
         },
         "type": "object",
         "required": [
-          "email",
           "station_ids",
-          "pollutants"
+          "pollutants",
+          "email"
         ],
         "title": "SubscriptionIn"
       },
-      "SubscriptionOut": {
+      "SubscriptionRequestOut": {
         "properties": {
-          "subscriber_id": {
+          "status": {
             "type": "string",
-            "format": "uuid",
-            "title": "Subscriber Id"
+            "title": "Status",
+            "default": "check-your-email"
           },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "default": "If this address can be subscribed, an email with a link has been sent to it. Nothing changes until the owner of the address opens that link."
+          }
+        },
+        "type": "object",
+        "title": "SubscriptionRequestOut",
+        "description": "Identical for every valid request, whatever the email's state, so the\nendpoint cannot be used to test whether an address is subscribed."
+      },
+      "SubscriptionStatusOut": {
+        "properties": {
           "status": {
             "type": "string",
             "title": "Status"
@@ -1518,10 +1734,24 @@
         },
         "type": "object",
         "required": [
-          "subscriber_id",
           "status"
         ],
-        "title": "SubscriptionOut"
+        "title": "SubscriptionStatusOut"
+      },
+      "TokenIn": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Token"
+          }
+        },
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "title": "TokenIn"
       },
       "ValidationError": {
         "properties": {

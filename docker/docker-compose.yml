@@ -22,6 +22,11 @@ x-airflow-common: &airflow-common
     SMTP_PASSWORD: ${SMTP_PASSWORD}
     ALERT_FROM_ADDRESS: ${ALERT_FROM_ADDRESS}
     DASHBOARD_URL: ${DASHBOARD_URL:-http://localhost:8501}
+    # Subscriptions / daily digest (see common/config.py). The digest needs
+    # the secret to build unsubscribe links, and both URLs to build the others.
+    FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-}
+    PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8000}
+    SUBSCRIPTION_TOKEN_SECRET: ${SUBSCRIPTION_TOKEN_SECRET:-}
   volumes:
     - ../config:/app/config:ro
     - airflow_logs:/opt/airflow/logs
@@ -98,6 +103,17 @@ services:
       STATIONS_CONFIG_PATH: ${STATIONS_CONFIG_PATH:-/app/config/stations_delhi_ncr.yaml}
       SETTINGS_CONFIG_PATH: ${SETTINGS_CONFIG_PATH:-/app/config/settings.yaml}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-*}
+      # The API sends the confirm / manage emails and checks unsubscribe tokens,
+      # so it needs the same mail and subscription settings as Airflow. Compose
+      # passes only what is listed here - .env alone is not enough.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      ALERT_FROM_ADDRESS: ${ALERT_FROM_ADDRESS:-alerts@air-pollution-prediction.local}
+      FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-}
+      PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8000}
+      SUBSCRIPTION_TOKEN_SECRET: ${SUBSCRIPTION_TOKEN_SECRET:-}
     volumes:
       - ../config:/app/config:ro
     ports:
