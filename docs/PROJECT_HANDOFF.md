@@ -14,6 +14,15 @@ The owner was away for 1-2 days after session 6 (from 2026-09-25 ~09:30 UTC). Th
 8. **Current CPCB feed**: `current_aqi_dag` succeeded most hours (data.gov.in published an empty feed for one hour on 2026-09-25; that is upstream).
 9. Then ask the owner whether the **domain** is ready: Phase 4 go-live (section 6 item 3).
 
+**Session 7 results (2026-09-27 ~17:45 UTC):**
+- Healthy: server (5 containers up, `/health` ok, disk 41%); backups daily through 09-27; `ingestion`, `feature_engineering`, `forecast`, `watchdog` and `station_maintenance` DAGs all succeeded; `evaluation_monitoring_dag` passed every night since the fix.
+- Weekly retrain (09-27 00:00 UTC) succeeded: it promoted 1,900 of 2,052 new models. No old/new model mix.
+- **CPCB upstream outage since ~2026-09-25 12:30 UTC.** Both CPCB routes stopped at the same time:
+  - data.gov.in: `current_aqi_dag` has failed every run since 09-25 13:40 UTC (gateway 502/timeouts, even for a 10-row query). The last CPCB snapshot is from 09-25 12:30 UTC.
+  - OpenAQ: 75 CPCB stations have had no new reading since then (OpenAQ returns 500 for their sensors). Only the 7 non-CPCB stations stay fresh.
+- Effect: forecasts only for about 7 stations (PM2.5 6 no-go / 1 go; NO2 none). Everything else is correctly `no-data`. The watchdog raises `aqi-feed-stale` every hour, but has no check for forecast coverage or input staleness.
+- Item 5 (verdict re-check) can't be done until CPCB data returns.
+
 ## 1. Goal
 A production-style service that tells **Delhi NCR schools whether outdoor practice is safe**, built to grow to other cities/countries later. Two signals per monitoring station: (a) **air quality right now**: official CPCB readings; (b) a **multi-day outlook**: hourly PM2.5/NO2 forecasts turned into go / caution / no-go / no-data. Hard product rule: **`no-data` (missing, stale or incomplete forecast) must never read as "go"**: a school could treat silence as clearance. The frontend is built by **Lovable** (now dormant, see section 6); the backend is ours.
 
