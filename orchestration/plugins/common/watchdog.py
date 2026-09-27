@@ -14,6 +14,10 @@ MAX_SNAPSHOT_AGE = timedelta(hours=3)
 # (71 stations matched on 2026-09-21).
 MIN_CURRENT_AQI_STATIONS = 20
 MAX_SENSOR_AGE = timedelta(hours=24)
+# Fewer stations than this with a current forecast means most schools see only no-data
+# (73 on 2026-09-25). The newest-reading check above misses this: during the CPCB outage
+# from 2026-09-25, 7 non-CPCB stations stayed fresh while 75 went silent.
+MIN_FORECAST_STATIONS = 30
 
 
 @dataclass(frozen=True)
@@ -30,6 +34,8 @@ def evaluate_health(
     stations_with_fresh_snapshot: int,
     sensor_ingestion_enabled: bool,
     newest_sensor_reading: datetime | None,
+    stations_with_current_forecast: int,
+    stations_with_fresh_input: int,
 ) -> list[Issue]:
     issues: list[Issue] = []
 
@@ -47,5 +53,16 @@ def evaluate_health(
     if sensor_ingestion_enabled and (newest_sensor_reading is None or now - newest_sensor_reading > MAX_SENSOR_AGE):
         age = "none" if newest_sensor_reading is None else f"{(now - newest_sensor_reading).total_seconds() / 3600:.0f}h old"
         issues.append(Issue("sensor-data-stale", f"No new sensor readings while ingestion is enabled: newest {age}."))
+
+    if sensor_ingestion_enabled and stations_with_current_forecast < MIN_FORECAST_STATIONS:
+        cause = (
+            "inputs are missing upstream" if stations_with_fresh_input < MIN_FORECAST_STATIONS
+            else "inputs are fresh, so the forecast pipeline itself is failing"
+        )
+        issues.append(Issue(
+            "forecast-coverage-low",
+            f"Only {stations_with_current_forecast} stations have a current forecast (expected >= {MIN_FORECAST_STATIONS}); "
+            f"{stations_with_fresh_input} have a sensor reading within 24h - {cause}.",
+        ))
 
     return issues

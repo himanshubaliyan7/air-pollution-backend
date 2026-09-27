@@ -8,7 +8,8 @@ H = timedelta(hours=1)
 
 def _check(**over):
     args = dict(aqi_feed_enabled=True, newest_snapshot=NOW - H, stations_with_fresh_snapshot=70,
-                sensor_ingestion_enabled=True, newest_sensor_reading=NOW - H)
+                sensor_ingestion_enabled=True, newest_sensor_reading=NOW - H,
+                stations_with_current_forecast=73, stations_with_fresh_input=80)
     args.update(over)
     return {i.key for i in evaluate_health(NOW, **args)}
 
@@ -35,4 +36,22 @@ def test_silent_sensor_ingestion_is_reported_but_not_while_deliberately_paused()
     """Regression: OpenAQ returned 401 for 6h+ while every run reported success."""
     assert _check(newest_sensor_reading=NOW - 30 * H) == {"sensor-data-stale"}
     assert _check(newest_sensor_reading=None) == {"sensor-data-stale"}
-    assert _check(newest_sensor_reading=NOW - 30 * H, sensor_ingestion_enabled=False) == set()
+    assert _check(newest_sensor_reading=NOW - 30 * H, sensor_ingestion_enabled=False,
+                  stations_with_current_forecast=0) == set()
+
+
+def test_collapsed_forecast_coverage_is_reported_even_when_some_stations_stay_fresh():
+    """Regression: CPCB went silent 2026-09-25 while 7 non-CPCB stations kept the newest reading fresh."""
+    issues = evaluate_health(NOW, aqi_feed_enabled=True, newest_snapshot=NOW - H, stations_with_fresh_snapshot=70,
+                             sensor_ingestion_enabled=True, newest_sensor_reading=NOW - H,
+                             stations_with_current_forecast=7, stations_with_fresh_input=7)
+    assert [i.key for i in issues] == ["forecast-coverage-low"]
+    assert "upstream" in issues[0].message
+    assert _check(stations_with_current_forecast=30) == set()  # boundary: exactly the minimum is fine
+
+
+def test_forecast_coverage_message_blames_the_pipeline_when_inputs_are_fresh():
+    issues = evaluate_health(NOW, aqi_feed_enabled=True, newest_snapshot=NOW - H, stations_with_fresh_snapshot=70,
+                             sensor_ingestion_enabled=True, newest_sensor_reading=NOW - H,
+                             stations_with_current_forecast=2, stations_with_fresh_input=80)
+    assert "pipeline" in issues[0].message

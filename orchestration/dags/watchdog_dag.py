@@ -25,7 +25,9 @@ def _run_watchdog(**_):
     from sqlalchemy import func, select
 
     from common.config import get_settings
-    from db.models import RawSensorReading, StationAqiSnapshot
+    from common.constants import MAX_INPUT_STALENESS_HOURS
+    from common.freshness import floor_hour
+    from db.models import Forecast, RawSensorReading, StationAqiSnapshot
     from db.session import get_session
     from orchestration.plugins.common.alerts import ping_healthcheck, send_telegram
     from orchestration.plugins.common.watchdog import evaluate_health
@@ -40,6 +42,16 @@ def _run_watchdog(**_):
             )
         ).scalar_one()
         newest_sensor = session.execute(select(func.max(RawSensorReading.observed_at))).scalar_one_or_none()
+        # Same cutoff as common.freshness.is_input_fresh, so "current" matches what the API serves.
+        cutoff = floor_hour(now) - timedelta(hours=MAX_INPUT_STALENESS_HOURS)
+        forecast_stations = session.execute(
+            select(func.count(func.distinct(Forecast.station_id))).where(
+                Forecast.forecast_made_at >= cutoff, Forecast.target_time >= cutoff  # target_time prunes hypertable chunks
+            )
+        ).scalar_one()
+        fresh_input_stations = session.execute(
+            select(func.count(func.distinct(RawSensorReading.station_id))).where(RawSensorReading.observed_at >= cutoff)
+        ).scalar_one()
     finally:
         session.close()
 
@@ -51,6 +63,8 @@ def _run_watchdog(**_):
         stations_with_fresh_snapshot=fresh,
         sensor_ingestion_enabled=bool(ingestion and not ingestion.is_paused),
         newest_sensor_reading=newest_sensor,
+        stations_with_current_forecast=forecast_stations,
+        stations_with_fresh_input=fresh_input_stations,
     )
 
     current_keys = {i.key for i in issues}
@@ -60,7 +74,7 @@ def _run_watchdog(**_):
         if last is None or now - datetime.fromisoformat(last) > REPEAT_AFTER:
             send_telegram(f"WATCHDOG: {issue.message}")
             Variable.set(var, now.isoformat())
-    for key in ("aqi-feed-stale", "aqi-coverage-low", "sensor-data-stale"):
+    for key in ("aqi-feed-stale", "aqi-coverage-low", "sensor-data-stale", "forecast-coverage-low"):
         var = f"watchdog_alerted:{key}"
         if key not in current_keys and Variable.get(var, default_var=None) is not None:
             send_telegram(f"WATCHDOG: resolved - {key}")
