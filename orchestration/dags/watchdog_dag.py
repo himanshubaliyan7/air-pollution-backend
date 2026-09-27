@@ -24,7 +24,6 @@ def _run_watchdog(**_):
     from airflow.models import DagModel, Variable
     from sqlalchemy import func, select
 
-    from common.config import get_settings
     from common.constants import MAX_INPUT_STALENESS_HOURS
     from common.freshness import floor_hour
     from db.models import Forecast, RawSensorReading, StationAqiSnapshot
@@ -58,7 +57,6 @@ def _run_watchdog(**_):
     ingestion = DagModel.get_dagmodel("ingestion_dag")
     issues = evaluate_health(
         now,
-        aqi_feed_enabled=bool(get_settings().data_gov_in_api_key),
         newest_snapshot=newest_snapshot,
         stations_with_fresh_snapshot=fresh,
         sensor_ingestion_enabled=bool(ingestion and not ingestion.is_paused),

@@ -1,6 +1,6 @@
-"""Current-conditions AQI from data.gov.in: matching to our stations, idempotent
-storage, the activity rule, and the API (including that an old reading is never
-served as current)."""
+"""Current-conditions CPCB AQI (direct feed, data.gov.in fallback): source order,
+matching to our stations, idempotent storage, the activity rule, and the API
+(including that an old reading is never served as current)."""
 
 from datetime import datetime, timedelta, timezone
 
@@ -70,22 +70,56 @@ def test_station_dark_on_openaq_is_kept_active_by_a_recent_snapshot(db_session, 
     assert active == {"openaq:has-aqi": True, "openaq:truly-dead": False}
 
 
-def test_ingest_is_skipped_without_a_key(monkeypatch):
+def _sources(monkeypatch, cpcb, data_gov_in, key="k"):
+    """Stub both feeds: each argument is a record list, or an exception to raise."""
     from common.config import get_settings
     from orchestration.plugins.common import tasks
 
-    monkeypatch.setattr(get_settings(), "data_gov_in_api_key", "")
-    assert tasks.ingest_current_aqi() == {"skipped": 1}
+    def stub(result):
+        def fetch(self, *a, **k):
+            if isinstance(result, Exception):
+                raise result
+            return result
+        return fetch
+
+    monkeypatch.setattr(get_settings(), "data_gov_in_api_key", key)
+    monkeypatch.setattr(tasks.CpcbCaaqmsClient, "fetch", stub(cpcb))
+    monkeypatch.setattr(tasks.DataGovInClient, "fetch", stub(data_gov_in))
+    return tasks
 
 
-def test_ingest_fails_loudly_when_the_feed_returns_nothing(monkeypatch):
-    from common.config import get_settings
-    from orchestration.plugins.common import tasks
+def test_ingest_prefers_cpcb_and_stores_hourly_sub_index_and_source(db_session, monkeypatch):
+    db_session.add(_station("openaq:near"))
+    db_session.commit()
+    rec = AqiRecord("Anand Vihar", "Delhi", "Delhi", 28.6469, 77.3158, "PM2.5", 5, 74, 23, HOUR, sub_index_hourly=11)
+    tasks = _sources(monkeypatch, cpcb=[rec], data_gov_in=RuntimeError("must not be called"))
 
-    monkeypatch.setattr(get_settings(), "data_gov_in_api_key", "k")
-    monkeypatch.setattr(tasks.DataGovInClient, "fetch", lambda self, filters=None: [])
-    with pytest.raises(RuntimeError):
-        tasks.ingest_current_aqi()
+    assert tasks.ingest_current_aqi()["source"] == "cpcb-caaqms"
+    row = db_session.query(StationAqiSnapshot).one()
+    assert (row.sub_index_avg, row.sub_index_hourly, row.source) == (23, 11, "cpcb-caaqms")
+
+
+def test_ingest_falls_back_to_data_gov_in_when_cpcb_fails_or_is_empty(monkeypatch):
+    for cpcb in (RuntimeError("CPCB down"), []):
+        tasks = _sources(monkeypatch, cpcb=cpcb, data_gov_in=[_rec("PM2.5", 100)])
+        records, source = tasks._fetch_current_aqi(NOW)
+        assert source == "data-gov-in" and len(records) == 1
+
+
+def test_ingest_falls_back_when_cpcb_is_stale_but_keeps_the_newest_if_all_are(monkeypatch):
+    old, older = _rec("PM2.5", 1, at=HOUR - timedelta(hours=8)), _rec("PM2.5", 2, at=HOUR - timedelta(hours=9))
+    tasks = _sources(monkeypatch, cpcb=[old], data_gov_in=[_rec("PM2.5", 3)])
+    assert tasks._fetch_current_aqi(NOW)[1] == "data-gov-in"
+    tasks = _sources(monkeypatch, cpcb=[old], data_gov_in=[older])
+    assert tasks._fetch_current_aqi(NOW) == ([old], "cpcb-caaqms")
+
+
+def test_ingest_works_without_a_data_gov_in_key_and_fails_loudly_when_every_source_fails(monkeypatch):
+    tasks = _sources(monkeypatch, cpcb=[_rec("PM2.5", 100)], data_gov_in=RuntimeError("no key, never called"), key="")
+    assert tasks._fetch_current_aqi(NOW)[1] == "cpcb-caaqms"
+    tasks = _sources(monkeypatch, cpcb=RuntimeError("CPCB down"), data_gov_in=[])
+    with pytest.raises(RuntimeError, match="cpcb-caaqms: CPCB down; data-gov-in: no usable records"):
+        tasks._fetch_current_aqi(NOW)
 
 
 def test_api_current_aqi_overall_categories_and_attribution(db_session):

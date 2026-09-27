@@ -12,7 +12,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from common.config import get_settings
-from common.freshness import floor_hour, is_input_fresh
+from common.freshness import floor_hour, is_input_fresh, is_reading_current
 from common.constants import (
     DEFAULT_HORIZONS_HOURS,
     MAX_INPUT_STALENESS_HOURS,
@@ -28,6 +28,7 @@ from ingestion.config import ACTIVE_SOURCE, SENSOR_SOURCE_REGISTRY, make_station
 from ingestion.loaders.aqi_snapshot_loader import load_aqi_snapshots
 from ingestion.loaders.sensor_loader import load_sensor_readings
 from ingestion.loaders.weather_loader import load_weather_readings
+from ingestion.sources.cpcb_caaqms import CpcbCaaqmsClient
 from ingestion.sources.data_gov_in import DataGovInClient
 from ingestion.weather.era5_client import ERA5Client
 from ingestion.weather.grid import DELHI_NCR_AREA
@@ -78,21 +79,47 @@ def ingest_sensor_readings(lookback_hours: int = SENSOR_LOOKBACK_HOURS) -> int:
         session.close()
 
 
-def ingest_current_aqi() -> dict:
-    """Hourly CPCB AQI sub-index snapshot from data.gov.in (current conditions).
-    Skipped, not failed, while no API key is configured."""
+def _fetch_current_aqi(now: datetime) -> tuple[list, str]:
+    """(records, source) from the first CPCB source that answers with a current
+    reading: CPCB's own feed, then data.gov.in (same data, republished) when a key
+    is set. Both relays we used before failed for days while CPCB itself kept
+    publishing (2026-09-24..27), so the direct feed comes first."""
+    errors: list[str] = []
+    candidates = [("cpcb-caaqms", lambda: CpcbCaaqmsClient().fetch())]
     api_key = get_settings().data_gov_in_api_key
-    if not api_key:
-        logger.info("DATA_GOV_IN_API_KEY not set; skipping current-AQI ingestion")
-        return {"skipped": 1}
+    if api_key:
+        candidates.append(("data-gov-in", lambda: DataGovInClient(api_key=api_key).fetch()))
+    best: tuple[list, str] | None = None
+    for source, fetch in candidates:
+        try:
+            records = fetch()
+        except Exception as exc:  # noqa: BLE001 - one source failing must not stop the next
+            logger.warning("Current AQI source %s failed: %s", source, exc)
+            errors.append(f"{source}: {exc}")
+            continue
+        if not records:
+            errors.append(f"{source}: no usable records")
+            continue
+        newest = max(r.observed_at for r in records)
+        if best is None or newest > max(r.observed_at for r in best[0]):
+            best = (records, source)
+        if is_reading_current(newest, now):
+            return best
+        logger.warning("Current AQI source %s is stale (newest %s); trying the next source", source, newest.isoformat())
+        errors.append(f"{source}: stale, newest {newest.isoformat()}")
+    if best is not None:
+        return best  # stale everywhere: store the newest anyway; the API will not serve it as current
+    raise RuntimeError("Every current-AQI source failed: " + "; ".join(errors))
+
+
+def ingest_current_aqi() -> dict:
+    """Hourly CPCB AQI sub-index snapshot (current conditions)."""
+    records, source = _fetch_current_aqi(datetime.now(timezone.utc))
     session = get_session()
     try:
-        records = DataGovInClient(api_key=api_key).fetch()
-        if not records:
-            raise RuntimeError("data.gov.in returned no usable records")
-        result = load_aqi_snapshots(session, records)
-        logger.info("Current AQI snapshots: %s (from %d feed rows)", result, len(records))
-        return result
+        result = load_aqi_snapshots(session, records, source=source)
+        logger.info("Current AQI snapshots from %s: %s (from %d feed rows)", source, result, len(records))
+        return {**result, "source": source}
     finally:
         session.close()
 

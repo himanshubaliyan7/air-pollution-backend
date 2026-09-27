@@ -104,7 +104,7 @@
           "current-aqi"
         ],
         "summary": "Get Current Aqi",
-        "description": "Official CPCB AQI right now (no forecast involved), when data.gov.in has\na recent reading for this station.",
+        "description": "Official CPCB AQI right now (no forecast involved), when CPCB has\na recent reading for this station.",
         "operationId": "get_current_aqi_api_v1_stations__station_id__current_aqi_get",
         "parameters": [
           {

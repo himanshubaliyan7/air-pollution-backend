@@ -1,5 +1,5 @@
-"""Matches data.gov.in records to our stations by coordinates and stores each
-hourly snapshot (idempotently), so history accumulates from now on."""
+"""Matches CPCB AQI records (direct CAAQMS feed or data.gov.in) to our stations by
+coordinates and stores each hourly snapshot (idempotently), so history accumulates."""
 
 import logging
 import math
@@ -37,7 +37,7 @@ def nearest_station(stations: list[Station], lat: float, lon: float) -> Station 
     return best
 
 
-def load_aqi_snapshots(session: Session, records: list[AqiRecord]) -> dict[str, int]:
+def load_aqi_snapshots(session: Session, records: list[AqiRecord], source: str | None = None) -> dict[str, int]:
     """Returns {"stored": rows written, "matched_stations": n, "unmatched_stations": n}.
 
     Matches against ALL stations, active or not: a station OpenAQ lists as dark
@@ -72,17 +72,19 @@ def load_aqi_snapshots(session: Session, records: list[AqiRecord]) -> dict[str, 
             "sub_index_min": rec.sub_index_min,
             "sub_index_max": rec.sub_index_max,
             "sub_index_avg": rec.sub_index_avg,
+            "sub_index_hourly": rec.sub_index_hourly,
             "fetched_at": now,
+            "source": source,
         }
         stmt = insert(StationAqiSnapshot).values(**values)
         stmt = stmt.on_conflict_do_update(
             index_elements=["station_id", "pollutant_id", "source_updated_at"],
-            set_={k: stmt.excluded[k] for k in ("sub_index_min", "sub_index_max", "sub_index_avg", "fetched_at")},
+            set_={k: stmt.excluded[k] for k in ("sub_index_min", "sub_index_max", "sub_index_avg", "sub_index_hourly", "fetched_at", "source")},
         )
         session.execute(stmt)
         stored += 1
 
     session.commit()
     if unmatched:
-        logger.info("data.gov.in stations with no station of ours within %.0f m: %s", MATCH_RADIUS_METERS, sorted(unmatched))
+        logger.info("CPCB stations with no station of ours within %.0f m: %s", MATCH_RADIUS_METERS, sorted(unmatched))
     return {"stored": stored, "matched_stations": len(matched), "unmatched_stations": len(unmatched)}

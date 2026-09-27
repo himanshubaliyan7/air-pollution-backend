@@ -26,6 +26,16 @@ Legend: [V] verified from the provider's own page on the date shown, [U] could n
 - Licence [V via the API's own metadata and the portal footer]: Government Open Data License - India (GODL-India); commercial and non-commercial use allowed with attribution. The API returns the exact attribution text (common/aqi.py ATTRIBUTION) and the frontend must show it.
 - API terms/rate limits: [U] the portal's terms page is a JavaScript shell whose API-specific rules could not be read; the API returns X-Ratelimit headers of -1 (no published limit). Our use is light: ~7 paged requests/hour with a personal key.
 - Key handling: personal key in docker/.env only; never commit or paste it.
+- Since 2026-09-28 this is the FALLBACK for current AQI; the primary is CPCB's own feed (next section).
+
+## CPCB CAAQMS feed (direct) - primary current-AQI source since 2026-09-28
+- What: `https://airquality.cpcb.gov.in/caaqms/rss_feed`, public XML, no key. It is the same real-time AQI dataset that CPCB publishes on data.gov.in (identical station names, coordinates and Min/Max/Avg values, checked 2026-09-27), plus an hourly sub-index.
+- Why: both relays failed for days while CPCB kept publishing (data.gov.in 502s from 2026-09-25; OpenAQ's CPCB relay silent from 2026-09-24).
+- Licence decision [owner, 2026-09-27]: rely on GODL-India, the licence CPCB attached to this dataset on data.gov.in, and show the same attribution (common/aqi.py ATTRIBUTION).
+  - Known risk [V, cpcb.gov.in/copyright-policy, 2026-09-27]: CPCB's website policy says site material "may be downloaded to file or printer without requiring specific prior permission. Any other proposed use of the material is subject to the approval of competent authority of CPCB" (requests to ccb.cpcb@nic.in).
+  - The owner accepted this risk. If CPCB objects, switch back to data.gov.in only (remove the CPCB source from orchestration/plugins/common/tasks.py `_fetch_current_aqi`).
+- Volume: one ~360 KB request per hour (plus up to 2 retries). No published rate limit [U].
+- Reachability: another project reported the feed timing out from outside India. Our server is in India (ap-mumbai-1).
 
 ## Adding a new provider (checklist)
 1. Read the terms and rate-limit pages; record limits, key policy, commercial-use, attribution, caching/redistribution rules here with [V]/[U] and the date.

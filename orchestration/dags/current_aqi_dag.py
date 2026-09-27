@@ -1,8 +1,8 @@
-"""Hourly: CPCB current-conditions AQI snapshot from data.gov.in.
+"""Hourly: CPCB current-conditions AQI snapshot, from CPCB's own CAAQMS feed
+(published on the IST hour, i.e. :30 UTC) with data.gov.in as the fallback.
 
-Separate from ingestion_dag on purpose: a different provider, key and cadence
-(the feed publishes ~30-90 minutes after the hour), so neither can stall the
-other. Skips itself while DATA_GOV_IN_API_KEY is unset.
+Separate from ingestion_dag on purpose: a different provider and cadence, so
+neither can stall the other.
 """
 
 from datetime import datetime, timedelta
@@ -18,7 +18,7 @@ default_args = {"owner": "air-pollution-prediction", "on_failure_callback": noti
 
 with DAG(
     dag_id="current_aqi_dag",
-    description="Hourly CPCB current AQI snapshot (data.gov.in)",
+    description="Hourly CPCB current AQI snapshot (CPCB feed, data.gov.in fallback)",
     schedule="40 * * * *",
     start_date=datetime(2026, 1, 1),
     catchup=False,

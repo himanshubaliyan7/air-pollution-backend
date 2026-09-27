@@ -4,11 +4,11 @@ Works on a region's thresholds file (config/thresholds_*.yaml), whose
 `aqi_range` bands map an AQI value to a category (e.g. 201-300 = poor).
 """
 
-# Must be shown wherever CPCB AQI data from data.gov.in is displayed (GODL-India licence).
+# Must be shown wherever CPCB AQI data is displayed (GODL-India licence), whichever feed it came from.
 # Lives here, not in ingestion/, so the API image (which has no `requests`) can import it.
 ATTRIBUTION = (
     "Source: Central Pollution Control Board (CPCB), Ministry of Environment, Forest and Climate Change, "
-    "Government of India, via data.gov.in, published under the Government Open Data License - India (GODL-India)."
+    "Government of India, published on data.gov.in under the Government Open Data License - India (GODL-India)."
 )
 
 # CPCB: the overall AQI is the worst sub-index, and is only valid when at least

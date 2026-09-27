@@ -29,7 +29,6 @@ class Issue:
 def evaluate_health(
     now: datetime,
     *,
-    aqi_feed_enabled: bool,
     newest_snapshot: datetime | None,
     stations_with_fresh_snapshot: int,
     sensor_ingestion_enabled: bool,
@@ -39,15 +38,15 @@ def evaluate_health(
 ) -> list[Issue]:
     issues: list[Issue] = []
 
-    if aqi_feed_enabled:
-        if newest_snapshot is None or now - newest_snapshot > MAX_SNAPSHOT_AGE:
-            age = "never" if newest_snapshot is None else f"{(now - newest_snapshot).total_seconds() / 3600:.1f}h old"
-            issues.append(Issue("aqi-feed-stale", f"Current-AQI feed (data.gov.in) is stale: newest snapshot {age}."))
-        elif stations_with_fresh_snapshot < MIN_CURRENT_AQI_STATIONS:
-            issues.append(Issue(
-                "aqi-coverage-low",
-                f"Only {stations_with_fresh_snapshot} stations have a fresh CPCB reading (expected >= {MIN_CURRENT_AQI_STATIONS}).",
-            ))
+    # Always checked: the primary current-AQI source (CPCB's own feed) needs no key.
+    if newest_snapshot is None or now - newest_snapshot > MAX_SNAPSHOT_AGE:
+        age = "never" if newest_snapshot is None else f"{(now - newest_snapshot).total_seconds() / 3600:.1f}h old"
+        issues.append(Issue("aqi-feed-stale", f"Current-AQI feed (CPCB) is stale: newest snapshot {age}."))
+    elif stations_with_fresh_snapshot < MIN_CURRENT_AQI_STATIONS:
+        issues.append(Issue(
+            "aqi-coverage-low",
+            f"Only {stations_with_fresh_snapshot} stations have a fresh CPCB reading (expected >= {MIN_CURRENT_AQI_STATIONS}).",
+        ))
 
     # Skipped while sensor ingestion is deliberately paused (e.g. OpenAQ suspended).
     if sensor_ingestion_enabled and (newest_sensor_reading is None or now - newest_sensor_reading > MAX_SENSOR_AGE):

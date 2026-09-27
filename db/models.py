@@ -281,7 +281,9 @@ class StationAqiSnapshot(Base):
     sub_index_min = Column(Float, nullable=True)
     sub_index_max = Column(Float, nullable=True)
     sub_index_avg = Column(Float, nullable=True)
+    sub_index_hourly = Column(Float, nullable=True)  # direct CPCB feed only; null from data.gov.in
     fetched_at = Column(DateTime(timezone=True), nullable=False)
+    source = Column(String, nullable=True)  # "cpcb-caaqms" or "data-gov-in"; null before 2026-09-28
 
 
 HYPERTABLE_SPECS = [

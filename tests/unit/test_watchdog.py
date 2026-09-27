@@ -7,7 +7,7 @@ H = timedelta(hours=1)
 
 
 def _check(**over):
-    args = dict(aqi_feed_enabled=True, newest_snapshot=NOW - H, stations_with_fresh_snapshot=70,
+    args = dict(newest_snapshot=NOW - H, stations_with_fresh_snapshot=70,
                 sensor_ingestion_enabled=True, newest_sensor_reading=NOW - H,
                 stations_with_current_forecast=73, stations_with_fresh_input=80)
     args.update(over)
@@ -28,10 +28,6 @@ def test_collapsed_coverage_is_reported_even_when_the_feed_is_fresh():
     assert _check(stations_with_fresh_snapshot=5) == {"aqi-coverage-low"}
 
 
-def test_aqi_checks_are_skipped_when_the_feed_is_not_configured():
-    assert _check(aqi_feed_enabled=False, newest_snapshot=None, stations_with_fresh_snapshot=0) == set()
-
-
 def test_silent_sensor_ingestion_is_reported_but_not_while_deliberately_paused():
     """Regression: OpenAQ returned 401 for 6h+ while every run reported success."""
     assert _check(newest_sensor_reading=NOW - 30 * H) == {"sensor-data-stale"}
@@ -42,7 +38,7 @@ def test_silent_sensor_ingestion_is_reported_but_not_while_deliberately_paused()
 
 def test_collapsed_forecast_coverage_is_reported_even_when_some_stations_stay_fresh():
     """Regression: CPCB went silent 2026-09-25 while 7 non-CPCB stations kept the newest reading fresh."""
-    issues = evaluate_health(NOW, aqi_feed_enabled=True, newest_snapshot=NOW - H, stations_with_fresh_snapshot=70,
+    issues = evaluate_health(NOW, newest_snapshot=NOW - H, stations_with_fresh_snapshot=70,
                              sensor_ingestion_enabled=True, newest_sensor_reading=NOW - H,
                              stations_with_current_forecast=7, stations_with_fresh_input=7)
     assert [i.key for i in issues] == ["forecast-coverage-low"]
@@ -51,7 +47,7 @@ def test_collapsed_forecast_coverage_is_reported_even_when_some_stations_stay_fr
 
 
 def test_forecast_coverage_message_blames_the_pipeline_when_inputs_are_fresh():
-    issues = evaluate_health(NOW, aqi_feed_enabled=True, newest_snapshot=NOW - H, stations_with_fresh_snapshot=70,
+    issues = evaluate_health(NOW, newest_snapshot=NOW - H, stations_with_fresh_snapshot=70,
                              sensor_ingestion_enabled=True, newest_sensor_reading=NOW - H,
                              stations_with_current_forecast=2, stations_with_fresh_input=80)
     assert "pipeline" in issues[0].message

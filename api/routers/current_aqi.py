@@ -19,7 +19,7 @@ _SAME_SNAPSHOT_WINDOW = timedelta(hours=3)
 
 @router.get("/{station_id}/current-aqi", response_model=CurrentAqiOut)
 def get_current_aqi(station_id: str, db: Session = Depends(get_db)):
-    """Official CPCB AQI right now (no forecast involved), when data.gov.in has
+    """Official CPCB AQI right now (no forecast involved), when CPCB has
     a recent reading for this station."""
     station = db.get(Station, station_id)
     if station is None:

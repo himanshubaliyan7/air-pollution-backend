@@ -58,6 +58,7 @@ class AqiRecord:
     sub_index_max: float | None
     sub_index_avg: float | None
     observed_at: datetime  # timezone-aware UTC
+    sub_index_hourly: float | None = None  # only the direct CPCB feed has it (cpcb_caaqms.py)
 
 
 def _number(raw) -> float | None:
