@@ -29,7 +29,7 @@ The owner was away for 1-2 days after session 6 (from 2026-09-25 ~09:30 UTC). Th
 - **Current AQI now comes straight from CPCB** (`ingestion/sources/cpcb_caaqms.py`, `https://airquality.cpcb.gov.in/caaqms/rss_feed`, no key), with data.gov.in as the fallback when CPCB fails, is empty, or is more than 6 h old.
   - Each snapshot row now records `source` and CPCB's `sub_index_hourly` (migration 0005).
   - Licence: the owner chose to rely on GODL-India; the risk is recorded in `docs/api_compliance.md`.
-  - Deploy is owner-run and must include `db-migrate`.
+  - Deployed 2026-09-27 20:51 UTC (migration 0005 ran). The first run stored 469 readings for 67 matched stations from the CPCB feed. The API then served current AQI for 67 of 85 stations, as of 20:30 UTC (about 20 min old; data.gov.in used to lag 30-90 min).
 - **Still open: forecasts at CPCB stations** stay no-data while OpenAQ's CPCB relay is down. Possible later step: convert the stored `sub_index_hourly` back to a concentration as a fallback model input. First find out what window that value covers and compare it with OpenAQ once OpenAQ is back.
 
 ## 1. Goal
