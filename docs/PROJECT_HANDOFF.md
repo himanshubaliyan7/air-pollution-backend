@@ -22,6 +22,9 @@ The owner was away for 1-2 days after session 6 (from 2026-09-25 ~09:30 UTC). Th
   - OpenAQ: 75 CPCB stations have had no new reading since then (OpenAQ returns 500 for their sensors). Only the 7 non-CPCB stations stay fresh.
 - Effect: forecasts only for about 7 stations (PM2.5 6 no-go / 1 go; NO2 none). Everything else is correctly `no-data`. The watchdog raises `aqi-feed-stale` every hour, but has no check for forecast coverage or input staleness.
 - Item 5 (verdict re-check) can't be done until CPCB data returns.
+- The owner chose to leave the system running through the outage; it recovers by itself when CPCB returns.
+- New watchdog issue `forecast-coverage-low` (`860631a`): fires when fewer than 30 stations have a current forecast, and the message names the cause (missing upstream inputs vs a failing pipeline). Once deployed, it will alert right away and send "resolved" when CPCB returns. **Deploy owner-run**: rebuild `airflow-scheduler airflow-webserver`.
+- Domain for the Phase 4 go-live: the owner expected it about 12 h after 2026-09-27 ~18:00 UTC. Go-live should also wait until CPCB data is flowing again.
 
 ## 1. Goal
 A production-style service that tells **Delhi NCR schools whether outdoor practice is safe**, built to grow to other cities/countries later. Two signals per monitoring station: (a) **air quality right now**: official CPCB readings; (b) a **multi-day outlook**: hourly PM2.5/NO2 forecasts turned into go / caution / no-go / no-data. Hard product rule: **`no-data` (missing, stale or incomplete forecast) must never read as "go"**: a school could treat silence as clearance. The frontend is built by **Lovable** (now dormant, see section 6); the backend is ours.
