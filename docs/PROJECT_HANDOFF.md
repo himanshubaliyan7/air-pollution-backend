@@ -23,7 +23,7 @@ The owner was away for 1-2 days after session 6 (from 2026-09-25 ~09:30 UTC). Th
 - Effect: forecasts only for about 7 stations (PM2.5 6 no-go / 1 go; NO2 none). Everything else is correctly `no-data`. The watchdog raises `aqi-feed-stale` every hour, but has no check for forecast coverage or input staleness.
 - Item 5 (verdict re-check) can't be done until CPCB data returns.
 - The owner chose to leave the system running through the outage; it recovers by itself when CPCB returns.
-- New watchdog issue `forecast-coverage-low` (`860631a`): fires when fewer than 30 stations have a current forecast, and the message names the cause (missing upstream inputs vs a failing pipeline). Once deployed, it will alert right away and send "resolved" when CPCB returns. **Deploy owner-run**: rebuild `airflow-scheduler airflow-webserver`.
+- New watchdog issue `forecast-coverage-low` (`860631a`): fires when fewer than 30 stations have a current forecast, and the message names the cause (missing upstream inputs vs a failing pipeline). Deployed 2026-09-27 18:55 UTC; its first alert reached Telegram (confirmed by the owner). It repeats every 6 h and sends "resolved" once CPCB returns.
 - Domain for the Phase 4 go-live: the owner expected it about 12 h after 2026-09-27 ~18:00 UTC. Go-live should also wait until CPCB data is flowing again.
 
 ## 1. Goal
