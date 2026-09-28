@@ -94,14 +94,31 @@ A production-style service that tells **Delhi NCR schools whether outdoor practi
    - The rest is real: 51-60 stations had an hourly reading > 91 ug/m3 in the previous 36 h.
    - The winter-trained models also lean high: median forecast ~75 vs ~50 observed, day 5 ~169. On their Aug 26-Sep 25 holdout they flagged about as many hours as exceeded, but hourly recall/precision there was only 0.11-0.20.
    - Options: keep; raise the decision threshold (config); limit the overall verdict to days 1-3. Rollback: `~/active_models_before_retrain_20260925.csv` on the server lists the previous 1,960 active model ids.
-3. **Phase 4 go-live, once the owner has a domain.** Backend is merged and deployed dormant; frontend PR #4 is open.
-   1. Configure the domain's mail provider (SPF/DKIM).
-   2. In the server `docker/.env` set `SMTP_HOST/PORT/USER/PASSWORD`, `ALERT_FROM_ADDRESS`, `FRONTEND_BASE_URL` (the site that serves `/subscriptions/*`), `PUBLIC_API_BASE_URL` (public https API URL, for RFC 8058 one-click unsubscribe), and `SUBSCRIPTION_TOKEN_SECRET` (NOT set yet; generate once with `python3 -c "import secrets; print(secrets.token_urlsafe(48))"` and never rotate casually).
-   3. Recreate `api airflow-scheduler airflow-webserver`.
-   4. Merge PR #4 and deploy the frontend; add the site origin to `CORS_ALLOWED_ORIGINS` if it changes.
-   5. Subscribe a test address end to end on production.
-   6. Unpause `alert_digest_dag`.
-   - If the domain also replaces sslip.io for the API, update Caddy's `CADDY_SITE_ADDRESS`, the frontend's `VITE_API_BASE_URL`, and `PUBLIC_API_BASE_URL`.
+3. **Phase 4 go-live on `himanshubaliyan.dev`, in DEMO MODE (owner decisions 2026-09-28).**
+   - The domain is the owner's portfolio domain (DNS on Cloudflare). Projects live on subdomains and are never commercial.
+   - Demo mode (`f613fcc`): only addresses in `SUBSCRIPTION_ALLOWED_EMAILS` can subscribe or get the digest. Others get the same 202, and nothing is stored or sent. `GET /subscriptions/availability` drives the frontend notice (PR #4, `32c3e21`).
+   - Names:
+     - frontend `air.himanshubaliyan.dev` (Workers custom domain);
+     - API `air-api.himanshubaliyan.dev` (A record to `137.23.49.72`, **DNS only / grey cloud**: Caddy gets its own certificate, and Cloudflare's free certificate would not cover a deeper name);
+     - mail from `alerts@air.himanshubaliyan.dev`.
+   - Mail provider: any SMTP service with STARTTLS on 587 works (mailer: `smtplib` + `starttls` + login). Suggested: Resend (`smtp.resend.com`, user `resend`, password = API key); verify the domain `air.himanshubaliyan.dev` there and add its DKIM/SPF/MX records in Cloudflare as DNS only. Also add a DMARC record: `_dmarc.air` TXT `v=DMARC1; p=none`.
+   - Steps (owner-run unless noted):
+     1. Mail provider account, domain verified, SMTP key created.
+     2. Cloudflare DNS: `air-api` A record `137.23.49.72`, proxy OFF.
+     3. Server `docker/.env`:
+        - `CADDY_SITE_ADDRESS=air-api.himanshubaliyan.dev, 137-23-49-72.sslip.io` (keep sslip during the switch);
+        - `CORS_ALLOWED_ORIGINS=https://air.himanshubaliyan.dev,https://himanshubaliyan7-air-clear.himanshubaliyan.workers.dev`;
+        - `FRONTEND_BASE_URL` and `DASHBOARD_URL` = `https://air.himanshubaliyan.dev`;
+        - `PUBLIC_API_BASE_URL=https://air-api.himanshubaliyan.dev`;
+        - `SMTP_HOST/PORT/USER/PASSWORD`, `ALERT_FROM_ADDRESS=alerts@air.himanshubaliyan.dev`;
+        - `SUBSCRIPTION_TOKEN_SECRET` (generate once on the server, never rotate casually);
+        - `SUBSCRIPTION_ALLOWED_EMAILS=<invited addresses>`.
+     4. `git pull`, then recreate `api airflow-scheduler airflow-webserver caddy` (caddy for the new address; no migration).
+     5. Check: `/health` on the new name; `/subscriptions/availability` says `open: false`.
+     6. Merge air-clear PR #4, deploy with `VITE_API_BASE_URL=https://air-api.himanshubaliyan.dev`, then add the custom domain `air.himanshubaliyan.dev` to the Worker (Workers & Pages -> the worker -> Settings -> Domains & Routes).
+     7. End-to-end test: an invited address subscribes and confirms, and gets a manage link; a non-invited address gets nothing.
+     8. Unpause `alert_digest_dag` (12:30 UTC = 18:00 IST daily).
+     9. Later: drop sslip from `CADDY_SITE_ADDRESS` and workers.dev from CORS.
 4. **Each "day" is one forecast hour** (section 4). Design a proper daily verdict before the peak season.
 5. **If 429s from OpenAQ reappear**: persist sensor IDs to a `Station` DB column. Not needed today.
 6. **Cloudflare API token**: never persisted; generate a fresh one per frontend deploy.
