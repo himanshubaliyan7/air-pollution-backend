@@ -241,7 +241,7 @@ def test_digest_states_every_verdict_including_no_data(client, db_session, outbo
     _subscribe(client, email="pending@example.com")  # unconfirmed: gets nothing
     outbox.clear()
 
-    assert _digest(db_session) == {"sent": 1, "failed": 0, "skipped": 0}
+    assert _digest(db_session) == {"sent": 1, "failed": 0, "skipped": 0, "not_invited": 0}
     assert len(outbox) == 1
     msg = outbox[0]
     body = _text(msg)
@@ -258,10 +258,10 @@ def test_digest_is_sent_once_per_day_and_failed_sends_are_retried(client, db_ses
     _confirmed(client, outbox)
     outbox.clear()
     FakeSMTP.fail = True
-    assert _digest(db_session) == {"sent": 0, "failed": 1, "skipped": 0}
+    assert _digest(db_session) == {"sent": 0, "failed": 1, "skipped": 0, "not_invited": 0}
     FakeSMTP.fail = False
-    assert _digest(db_session) == {"sent": 1, "failed": 0, "skipped": 0}
-    assert _digest(db_session) == {"sent": 0, "failed": 0, "skipped": 1}
+    assert _digest(db_session) == {"sent": 1, "failed": 0, "skipped": 0, "not_invited": 0}
+    assert _digest(db_session) == {"sent": 0, "failed": 0, "skipped": 1, "not_invited": 0}
     assert len(outbox) == 1
     log = db_session.execute(select(DigestLog)).scalar_one()
     assert log.status == AlertStatus.SENT and log.digest_date.isoformat() == "2026-09-26"
@@ -286,3 +286,35 @@ def test_digest_uses_the_same_verdicts_as_the_website(client, db_session, outbox
     tomorrow = (DIGEST_NOW + timedelta(days=1)).date()
     assert outlook.verdict_for(tomorrow) == "caution"
     assert "Sat 26 Sep: Caution" in _text(outbox[0])
+
+
+# ------------------------------------------------------------------ demo mode
+
+def test_demo_mode_only_invited_addresses_can_subscribe_and_strangers_leave_no_trace(
+    client, db_session, outbox, monkeypatch
+):
+    monkeypatch.setattr(get_settings(), "subscription_allowed_emails", " Owner@Example.com , friend@example.com")
+
+    invited = _subscribe(client, email="owner@example.com")
+    stranger = _subscribe(client, email="school@example.com")
+    assert invited.status_code == stranger.status_code == 202
+    assert invited.json() == stranger.json()  # the reply must not reveal who is invited
+    assert [m["To"] for m in outbox] == ["owner@example.com"]
+    assert _row(db_session, "school@example.com") is None  # nothing stored about the stranger
+    assert _row(db_session, "owner@example.com") is not None
+
+
+def test_availability_says_whether_sign_ups_are_open_without_listing_anyone(client, monkeypatch):
+    assert client.get("/api/v1/subscriptions/availability").json()["open"] is True
+    monkeypatch.setattr(get_settings(), "subscription_allowed_emails", "owner@example.com")
+    body = client.get("/api/v1/subscriptions/availability").json()
+    assert body["open"] is False and "demo" in body["message"]
+    assert "owner@example.com" not in str(body)
+
+
+def test_digest_skips_a_confirmed_address_that_is_no_longer_invited(client, db_session, outbox, monkeypatch):
+    _confirmed(client, outbox)  # subscribed while sign-ups were open
+    outbox.clear()
+    monkeypatch.setattr(get_settings(), "subscription_allowed_emails", "owner@example.com")
+    assert _digest(db_session) == {"sent": 0, "failed": 0, "skipped": 0, "not_invited": 1}
+    assert outbox == []

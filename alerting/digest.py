@@ -95,9 +95,12 @@ def send_daily_digests(session: Session, now: datetime) -> dict[str, int]:
         select(AlertSubscription).where(AlertSubscription.is_confirmed.is_(True), AlertSubscription.is_active.is_(True))
     ).scalars().all()
     cache: dict = {}
-    result = {"sent": 0, "failed": 0, "skipped": 0}
+    result = {"sent": 0, "failed": 0, "skipped": 0, "not_invited": 0}
 
     for sub in subscribers:
+        if not settings.may_subscribe(sub.email):  # demo mode, e.g. an address removed from the invite list
+            result["not_invited"] += 1
+            continue
         first = session.get(Station, sub.station_ids[0]) if sub.station_ids else None
         tz = ZoneInfo(station_timezone(first) if first else "UTC")
         tomorrow = now.astimezone(tz).date() + timedelta(days=1)

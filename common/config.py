@@ -57,6 +57,19 @@ class Settings(BaseSettings):
     # once with `python -c "import secrets; print(secrets.token_urlsafe(48))"`
     # and never rotate casually (rotation breaks every emailed link).
     subscription_token_secret: str = ""
+    # Demo mode: when set (comma-separated addresses), only these may subscribe
+    # or receive the digest. Empty = open to anyone. Chosen by the owner
+    # 2026-09-28 for the non-commercial portfolio deployment.
+    subscription_allowed_emails: str = ""
+
+    def subscription_allowlist(self) -> frozenset[str] | None:
+        """Lowercased invited addresses, or None when sign-ups are open."""
+        emails = {e.strip().lower() for e in self.subscription_allowed_emails.split(",") if e.strip()}
+        return frozenset(emails) or None
+
+    def may_subscribe(self, email: str) -> bool:
+        allowlist = self.subscription_allowlist()
+        return allowlist is None or email.strip().lower() in allowlist
 
     openaq_api_key: str = ""
     # Free personal key from data.gov.in (My Account). Empty = current-AQI ingestion is skipped.

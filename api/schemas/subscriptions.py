@@ -62,5 +62,12 @@ class SubscriptionRequestOut(BaseModel):
     )
 
 
+class SubscriptionAvailabilityOut(BaseModel):
+    """Whether anyone may sign up. Never lists or hints at the invited addresses."""
+
+    open: bool
+    message: str
+
+
 class SubscriptionStatusOut(BaseModel):
     status: str

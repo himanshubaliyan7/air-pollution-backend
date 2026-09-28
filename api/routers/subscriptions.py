@@ -30,6 +30,7 @@ from alerting.retention import erase_subscriber
 from api.db import get_db
 from api.schemas.subscriptions import (
     ManageIn,
+    SubscriptionAvailabilityOut,
     SubscriptionIn,
     SubscriptionRequestOut,
     SubscriptionStatusOut,
@@ -155,13 +156,32 @@ def _send_in_background(kind: str, email: str, token: str) -> None:
         logger.exception("Failed to send %s email to %s", kind, email)
 
 
+@router.get("/availability", response_model=SubscriptionAvailabilityOut)
+def subscription_availability():
+    """Lets a client say up front that sign-ups are invite-only (demo mode)."""
+    if get_settings().subscription_allowlist() is None:
+        return SubscriptionAvailabilityOut(open=True, message="Anyone can subscribe.")
+    return SubscriptionAvailabilityOut(
+        open=False,
+        message="This is a demo: daily emails are limited to invited addresses. "
+        "Other addresses will not receive an email.",
+    )
+
+
 @router.post("", status_code=202, response_model=SubscriptionRequestOut)
 def request_subscription(payload: SubscriptionIn, background: BackgroundTasks, db: Session = Depends(get_db)):
     """Ask to subscribe. Always answers the same 202 body (no subscriber id, no
     hint whether the address is already known). Emails a confirmation link for
     a new/pending address, or a manage link for a confirmed one; nothing is
-    activated or modified until the mailbox owner uses a link."""
+    activated or modified until the mailbox owner uses a link.
+
+    In demo mode an address that is not invited gets the same 202, but nothing
+    is stored or sent: the reply must not reveal who is invited, and we keep no
+    data about people who cannot use the service."""
     _require_known_stations(db, payload.station_ids)
+    if not get_settings().may_subscribe(payload.email):
+        logger.info("Demo mode: ignored a sign-up from an address that is not invited")
+        return SubscriptionRequestOut()
     outcome = _register(db, payload, utc_now())
     db.commit()
     if outcome is not None:

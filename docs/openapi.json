@@ -501,13 +501,35 @@
         }
       }
     },
+    "/api/v1/subscriptions/availability": {
+      "get": {
+        "tags": [
+          "subscriptions"
+        ],
+        "summary": "Subscription Availability",
+        "description": "Lets a client say up front that sign-ups are invite-only (demo mode).",
+        "operationId": "subscription_availability_api_v1_subscriptions_availability_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionAvailabilityOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/subscriptions": {
       "post": {
         "tags": [
           "subscriptions"
         ],
         "summary": "Request Subscription",
-        "description": "Ask to subscribe. Always answers the same 202 body (no subscriber id, no\nhint whether the address is already known). Emails a confirmation link for\na new/pending address, or a manage link for a confirmed one; nothing is\nactivated or modified until the mailbox owner uses a link.",
+        "description": "Ask to subscribe. Always answers the same 202 body (no subscriber id, no\nhint whether the address is already known). Emails a confirmation link for\na new/pending address, or a manage link for a confirmed one; nothing is\nactivated or modified until the mailbox owner uses a link.\n\nIn demo mode an address that is not invited gets the same 202, but nothing\nis stored or sent: the reply must not reveal who is invited, and we keep no\ndata about people who cannot use the service.",
         "operationId": "request_subscription_api_v1_subscriptions_post",
         "requestBody": {
           "content": {
@@ -1671,6 +1693,25 @@
           "is_active"
         ],
         "title": "StationOut"
+      },
+      "SubscriptionAvailabilityOut": {
+        "properties": {
+          "open": {
+            "type": "boolean",
+            "title": "Open"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "open",
+          "message"
+        ],
+        "title": "SubscriptionAvailabilityOut",
+        "description": "Whether anyone may sign up. Never lists or hints at the invited addresses."
       },
       "SubscriptionIn": {
         "properties": {

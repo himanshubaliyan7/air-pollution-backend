@@ -27,6 +27,7 @@ x-airflow-common: &airflow-common
     FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-}
     PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8000}
     SUBSCRIPTION_TOKEN_SECRET: ${SUBSCRIPTION_TOKEN_SECRET:-}
+    SUBSCRIPTION_ALLOWED_EMAILS: ${SUBSCRIPTION_ALLOWED_EMAILS:-}
   volumes:
     - ../config:/app/config:ro
     - airflow_logs:/opt/airflow/logs
@@ -114,6 +115,7 @@ services:
       FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-}
       PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8000}
       SUBSCRIPTION_TOKEN_SECRET: ${SUBSCRIPTION_TOKEN_SECRET:-}
+      SUBSCRIPTION_ALLOWED_EMAILS: ${SUBSCRIPTION_ALLOWED_EMAILS:-}
     volumes:
       - ../config:/app/config:ro
     ports:
