@@ -226,3 +226,35 @@ def test_exceedance_reports_forecast_time_and_currency(db_session):
     body = client.get(f"/api/v1/forecast/{sid}/exceedance").json()
     assert body["is_current"] is False and body["days"] == [] and body["overall_recommendation"] == "no-data"
     assert body["forecast_made_at"] is not None  # says how old the last run was
+
+
+def test_ingest_stores_cpcb_readings_that_fill_but_never_override_openaq(db_session, monkeypatch):
+    from common.constants import Pollutant
+    from db.models import RawSensorReading
+    from db.readings import hourly_readings
+
+    db_session.add(_station("openaq:near"))
+    db_session.commit()
+    last_update = HOUR - timedelta(minutes=30)  # a whole IST hour is :30 UTC
+    hour_start = (last_update - timedelta(hours=1, minutes=30)).replace(minute=0)
+    records = [
+        AqiRecord("Anand Vihar", "Delhi", "Delhi", 28.6469, 77.3158, "PM2.5", 5, 74, 23, last_update, sub_index_hourly=150),
+        AqiRecord("Anand Vihar", "Delhi", "Delhi", 28.6469, 77.3158, "NO2", 5, 74, 23, last_update, sub_index_hourly=100),
+    ]
+    tasks = _sources(monkeypatch, cpcb=records, data_gov_in=RuntimeError("must not be called"))
+
+    assert tasks.ingest_current_aqi()["cpcb_readings"] == 2
+    rows = db_session.query(RawSensorReading).filter_by(station_id="openaq:near").all()
+    assert {(r.pollutant, r.observed_at, r.source) for r in rows} == {
+        (Pollutant.PM25, hour_start, SensorSourceName.CPCB),
+        (Pollutant.NO2, hour_start, SensorSourceName.CPCB),
+    }
+    assert hourly_readings(db_session, "openaq:near", Pollutant.NO2, hour_start) == [(hour_start, 80.0)]
+
+    # OpenAQ wins an hour both hold.
+    db_session.add(RawSensorReading(
+        station_id="openaq:near", pollutant=Pollutant.NO2, observed_at=hour_start, source=SensorSourceName.OPENAQ,
+        value=77.0, unit="µg/m³", ingested_at=NOW,
+    ))
+    db_session.commit()
+    assert hourly_readings(db_session, "openaq:near", Pollutant.NO2, hour_start) == [(hour_start, 77.0)]

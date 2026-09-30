@@ -21,11 +21,13 @@ from common.constants import (
     SensorSourceName,
 )
 from db.models import Forecast, ModelRun, RawSensorReading, Station, StationAqiSnapshot
+from db.readings import hourly_readings
 from db.session import get_session
 from features.build_features import build_feature_frame
 from features.feature_store import write_features
 from ingestion.config import ACTIVE_SOURCE, SENSOR_SOURCE_REGISTRY, make_station_id
 from ingestion.loaders.aqi_snapshot_loader import load_aqi_snapshots
+from ingestion.loaders.cpcb_reading_loader import readings_from_snapshots
 from ingestion.loaders.sensor_loader import load_sensor_readings
 from ingestion.loaders.weather_loader import load_weather_readings
 from ingestion.sources.cpcb_caaqms import CpcbCaaqmsClient
@@ -112,12 +114,21 @@ def _fetch_current_aqi(now: datetime) -> tuple[list, str]:
     raise RuntimeError("Every current-AQI source failed: " + "; ".join(errors))
 
 
+CPCB_READINGS_LOOKBACK_HOURS = 6  # re-derives a few recent snapshots; idempotent
+
+
 def ingest_current_aqi() -> dict:
-    """Hourly CPCB AQI sub-index snapshot (current conditions)."""
-    records, source = _fetch_current_aqi(datetime.now(timezone.utc))
+    """Hourly CPCB AQI sub-index snapshot (current conditions), plus the hourly
+    PM2.5/NO2 concentrations it implies, stored as CPCB readings that fill
+    hours OpenAQ lacks (ingestion/loaders/cpcb_reading_loader.py)."""
+    now = datetime.now(timezone.utc)
+    records, source = _fetch_current_aqi(now)
     session = get_session()
     try:
         result = load_aqi_snapshots(session, records, source=source)
+        result["cpcb_readings"] = readings_from_snapshots(
+            session, exceedance.load_thresholds(), since=now - timedelta(hours=CPCB_READINGS_LOOKBACK_HOURS)
+        )
         logger.info("Current AQI snapshots from %s: %s (from %d feed rows)", source, result, len(records))
         return {**result, "source": source}
     finally:
@@ -451,15 +462,7 @@ def evaluate_recent_forecasts(evaluation_window_days: int = 1) -> int:
                     if not forecast_rows:
                         continue
 
-                    actual_rows = session.execute(
-                        select(RawSensorReading.observed_at, RawSensorReading.value).where(
-                            RawSensorReading.station_id == station.station_id,
-                            RawSensorReading.pollutant == pollutant,
-                            RawSensorReading.observed_at >= window_start,
-                            RawSensorReading.observed_at <= now,
-                        )
-                    ).all()
-                    actual_by_time = {r.observed_at: r.value for r in actual_rows}
+                    actual_by_time = dict(hourly_readings(session, station.station_id, pollutant, window_start, now))
 
                     paired = [
                         (actual_by_time[r.target_time], r.point_forecast, r.exceedance_flag)

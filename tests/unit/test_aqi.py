@@ -27,3 +27,23 @@ def test_health_threshold_flag_uses_the_regions_declared_category():
     flags = {c: at_or_above_health_threshold(thresholds, c) for c in
              ["good", "satisfactory", "moderate", "poor", "very_poor", "severe"]}
     assert flags == {"good": False, "satisfactory": False, "moderate": False, "poor": True, "very_poor": True, "severe": True}
+
+
+def test_sub_index_inverts_to_concentration_at_cpcb_anchor_points():
+    from common.aqi import concentration_from_sub_index
+
+    thresholds = get_region("delhi-ncr").thresholds()
+    pm25 = {0: 0.0, 50: 30.0, 51: 31.0, 100: 60.0, 200: 90.0, 201: 91.0, 300: 120.0, 400: 250.0, 401: 251.0}
+    for sub_index, conc in pm25.items():
+        assert concentration_from_sub_index(thresholds, "pm25", sub_index) == (conc, False), sub_index
+    value, capped = concentration_from_sub_index(thresholds, "pm25", 150)  # band 101-200 <-> 61-90, linear
+    assert (round(value, 2), capped) == (75.35, False)
+    assert concentration_from_sub_index(thresholds, "no2", 100) == (80.0, False)
+
+
+def test_sub_index_at_the_top_of_the_scale_is_a_capped_floor():
+    from common.aqi import concentration_from_sub_index
+
+    thresholds = get_region("delhi-ncr").thresholds()
+    assert concentration_from_sub_index(thresholds, "pm25", 500) == (380.0, True)
+    assert concentration_from_sub_index(thresholds, "pm25", 612) == (380.0, True)

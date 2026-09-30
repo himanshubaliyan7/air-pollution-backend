@@ -63,7 +63,11 @@ A production-style service that tells **Delhi NCR schools whether outdoor practi
    Details are in sections 5, 6 and 6a.
 
 ## 4. Key design decisions and why
-- Forecast models use hourly ug/m3 history only. The CPCB feed is **AQI sub-indices**, so it powers current conditions and is **never** fed to the models.
+- Forecast models use hourly ug/m3 history only. The CPCB feed is **AQI sub-indices**. Until 2026-10-01 it powered current conditions only.
+  - **Since Phase 6 P0 step 3:** its `Hourly_sub_index` for PM2.5/NO2 is inverted through the CPCB breakpoints and stored as readings with source `CPCB` (`ingestion/loaders/cpcb_reading_loader.py`, written by `current_aqi_dag`), stamped lastupdate - 1.5 h.
+  - Validated against OpenAQ (`scripts/cpcb_subindex_study.py`: PM2.5 medAE 1.2 ug/m3, ratio 1.00).
+  - `db/readings.py` makes OpenAQ win any hour both hold, for every consumer (features, training targets, evaluation, API history). So CPCB only fills gaps, e.g. while OpenAQ's relay stalls.
+  - The Avg/Min/Max fields (24 h statistics) are still never used as model input.
 - Forecasts anchor on each station's newest observed hour, skipped if older than `MAX_INPUT_STALENESS_HOURS` = **24** (was 6; CPCB-via-OpenAQ data arrives ~12 h late). Current conditions (CPCB snapshots) have their own stricter `MAX_CURRENT_READING_AGE_HOURS` = 6. Stale/missing/incomplete => `no-data`, never `go`.
 - **No-go rule is hourly** (owner decision 2026-09-25): a day is flagged when its forecast hour is likely above 91 ug/m3 PM2.5, stricter than CPCB's 24 h-average category. Caveat: each "day" is ONE forecast hour (anchor hour + N x 24 h, ~21:30 IST for CPCB stations), not every hour of the day - a model-design limitation to fix later (e.g. hourly horizons or daily-max models).
 - Units are converted to ug/m3 at the ingestion boundary (`ingestion/units.py`); unconvertible units are dropped, not guessed.

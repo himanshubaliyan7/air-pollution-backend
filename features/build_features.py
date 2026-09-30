@@ -15,7 +15,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from common.constants import LAG_HOURS, ROLLING_WINDOWS_HOURS, Pollutant, WeatherProductType
-from db.models import RawSensorReading, RawWeatherReading
+from db.models import RawWeatherReading
+from db.readings import hourly_readings
 from features.calendar.delhi_calendar import load_calendar_config
 from features.lag_features import compute_lags, compute_rolling, reindex_hourly
 from features.time_features import add_calendar_flags, add_cyclical
@@ -28,24 +29,14 @@ MAX_LOOKBACK_HOURS = max(LAG_HOURS + ROLLING_WINDOWS_HOURS)
 def _fetch_pollutant_series(
     session: Session, station_id: str, pollutant: Pollutant, start: datetime, end: datetime
 ) -> pd.Series:
-    stmt = (
-        select(RawSensorReading.observed_at, RawSensorReading.value)
-        .where(
-            RawSensorReading.station_id == station_id,
-            RawSensorReading.pollutant == pollutant,
-            RawSensorReading.observed_at >= start,
-            RawSensorReading.observed_at <= end,
-        )
-        .order_by(RawSensorReading.observed_at)
-    )
-    rows = session.execute(stmt).all()
+    # One value per hour, OpenAQ first and CPCB filling gaps (db/readings.py).
+    rows = hourly_readings(session, station_id, pollutant, start, end)
     if not rows:
         return pd.Series(dtype="float64")
-    idx = pd.DatetimeIndex([r.observed_at for r in rows], tz="UTC")
-    series = pd.Series([r.value for r in rows], index=idx)
-    # Multiple sources could in principle report the same hour; average dupes
-    # rather than arbitrarily picking one.
-    return series.groupby(series.index).mean()
+    idx = pd.DatetimeIndex([t for t, _ in rows], tz="UTC")
+    series = pd.Series([v for _, v in rows], index=idx)
+    # The same instant can arrive with different tz offsets; keep one value.
+    return series.groupby(series.index).first()
 
 
 def _fetch_weather_frame(session: Session, grid_cell_id: str, start: datetime, end: datetime) -> pd.DataFrame:

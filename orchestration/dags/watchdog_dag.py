@@ -24,7 +24,7 @@ def _run_watchdog(**_):
     from airflow.models import DagModel, Variable
     from sqlalchemy import func, select
 
-    from common.constants import MAX_INPUT_STALENESS_HOURS
+    from common.constants import MAX_INPUT_STALENESS_HOURS, SensorSourceName
     from common.freshness import floor_hour
     from db.models import Forecast, RawSensorReading, StationAqiSnapshot
     from db.session import get_session
@@ -40,7 +40,11 @@ def _run_watchdog(**_):
                 StationAqiSnapshot.source_updated_at >= now - timedelta(hours=3)
             )
         ).scalar_one()
-        newest_sensor = session.execute(select(func.max(RawSensorReading.observed_at))).scalar_one_or_none()
+        # OpenAQ only: ingestion_dag's own feed. CPCB readings (from current_aqi_dag) would
+        # otherwise hide a broken ingestion run or a stalled OpenAQ relay.
+        newest_sensor = session.execute(
+            select(func.max(RawSensorReading.observed_at)).where(RawSensorReading.source == SensorSourceName.OPENAQ)
+        ).scalar_one_or_none()
         # Same cutoff as common.freshness.is_input_fresh, so "current" matches what the API serves.
         cutoff = floor_hour(now) - timedelta(hours=MAX_INPUT_STALENESS_HOURS)
         forecast_stations = session.execute(

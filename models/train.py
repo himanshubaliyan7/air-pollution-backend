@@ -15,12 +15,12 @@ from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from common.config import get_settings, load_yaml_config
 from common.constants import ModelType, Pollutant
-from db.models import ModelRun, RawSensorReading
+from db.models import ModelRun
+from db.readings import hourly_readings
 from features.feature_store import get_feature_set_version, read_features
 from models import evaluation, exceedance, registry
 from models.lightgbm_pipeline import fit_classifier, fit_point_model, fit_quantile_model, predict, prepare_X
@@ -40,17 +40,11 @@ def load_model_config() -> dict:
 
 
 def _fetch_target_series(session: Session, station_id: str, pollutant: Pollutant, start: datetime, end: datetime) -> pd.Series:
-    stmt = select(RawSensorReading.observed_at, RawSensorReading.value).where(
-        RawSensorReading.station_id == station_id,
-        RawSensorReading.pollutant == pollutant,
-        RawSensorReading.observed_at >= start,
-        RawSensorReading.observed_at <= end,
-    )
-    rows = session.execute(stmt).all()
+    rows = hourly_readings(session, station_id, pollutant, start, end)  # same source rule as the features
     if not rows:
         return pd.Series(dtype="float64")
-    idx = pd.DatetimeIndex([r.observed_at for r in rows], tz="UTC")
-    return pd.Series([r.value for r in rows], index=idx).groupby(level=0).mean()
+    idx = pd.DatetimeIndex([t for t, _ in rows], tz="UTC")
+    return pd.Series([v for _, v in rows], index=idx).groupby(level=0).first()
 
 
 def build_training_matrix(

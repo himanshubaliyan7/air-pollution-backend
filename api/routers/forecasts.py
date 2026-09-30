@@ -9,7 +9,8 @@ from api.schemas.forecasts import ForecastPointOut, ForecastSeriesOut, HistoryOu
 from api.schemas.model_health import ModelHealthOut
 from common.constants import Pollutant
 from common.regions import region_for_point
-from db.models import ExceedanceEvaluation, Forecast, RawSensorReading, Station
+from db.models import ExceedanceEvaluation, Forecast, Station
+from db.readings import hourly_readings
 from models.outlook import is_forecast_current, latest_forecast_made_at  # noqa: F401  (re-exported)
 
 router = APIRouter(tags=["forecasts"])
@@ -91,14 +92,7 @@ def get_forecast_history(
 
     window_start = datetime.now(timezone.utc) - timedelta(days=lookback_days)
 
-    actual_rows = db.execute(
-        select(RawSensorReading.observed_at, RawSensorReading.value).where(
-            RawSensorReading.station_id == station_id,
-            RawSensorReading.pollutant == pollutant,
-            RawSensorReading.observed_at >= window_start,
-        )
-    ).all()
-    actual_by_time = {r.observed_at: r.value for r in actual_rows}
+    actual_by_time = dict(hourly_readings(db, station_id, pollutant, window_start))
 
     # For each past target_time, use the forecast that was made closest to
     # (but not after) that target_time minus its own horizon - i.e. the

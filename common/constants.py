@@ -11,6 +11,10 @@ class Pollutant(str, enum.Enum):
 class SensorSourceName(str, enum.Enum):
     OPENAQ = "openaq"
     AIRNOW = "airnow"  # reserved for a future US region, not wired up for Delhi NCR
+    # Hourly concentrations recovered from CPCB's own CAAQMS feed (its hourly AQI
+    # sub-index, inverted through the CPCB breakpoints). Fills hours OpenAQ lacks;
+    # never outranks OpenAQ for the same hour (db/readings.py).
+    CPCB = "cpcb"
 
 
 class WeatherProductType(str, enum.Enum):

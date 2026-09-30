@@ -26,6 +26,22 @@ def category_for_sub_index(thresholds: dict, value: float) -> str:
     return bands[-1]["category"]
 
 
+def concentration_from_sub_index(thresholds: dict, pollutant: str, sub_index: float) -> tuple[float, bool]:
+    """(concentration, capped) for a CPCB sub-index, linear within each band
+    (the inverse of CPCB's own formula). `capped` is True at the top of the
+    scale, where every higher concentration reads the same: the value returned
+    is then the band's upper bound, a floor rather than the real reading."""
+    bands = thresholds["pollutants"][pollutant]["breakpoints"]
+    top_index, top_conc = bands[-1]["aqi_range"][1], float(bands[-1]["conc_range"][1])
+    if sub_index >= top_index:
+        return top_conc, True
+    for band in bands:
+        (i_lo, i_hi), (c_lo, c_hi) = band["aqi_range"], band["conc_range"]
+        if sub_index <= i_hi:
+            return c_lo + (max(sub_index, i_lo) - i_lo) * (c_hi - c_lo) / (i_hi - i_lo), False
+    return top_conc, True
+
+
 def at_or_above_health_threshold(thresholds: dict, category: str) -> bool:
     """True when `category` is at or worse than the region's declared
     health-threshold category (the level at which outdoor practice is not
