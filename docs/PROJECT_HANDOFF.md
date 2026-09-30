@@ -113,6 +113,11 @@ Delhi's pollution season starts mid-October (stubble burning) and peaks in Novem
      c. Recompute NO2 features, retrain and force-promote the NO2 models (55 stations), regenerate forecasts.
      d. Verify: rerun `cpcb_subindex_study.py`; the NO2 ratio should be ~1.0.
      - Why before winter: Delhi winter hourly NO2 of 100-150 ug/m3 is stored as 190-280, above the 181 "poor" line, which gives false NO2 no-go verdicts.
+   - **NO2 fix progress (2026-10-01):**
+     - a. DONE: code `85ed394` (`ingestion.sources.openaq.declared_unit`) deployed (api, scheduler, webserver rebuilt) with `ingestion_dag` paused.
+     - b. DONE: `scripts/fix_no2_units.py --step data` divided 424,408 NO2 rows (75 stations, 75 'ppb' sensors; 0 other NO2 rows) by 1.8816. Probe: 1.882 before, 1.0 after. `ingestion_dag` unpaused.
+     - c. RUNNING: `--step features && --step retrain` (nohup, log `~/no2_rebuild_20261001.log` on the server; the old active model ids are printed there as `ROLLBACK ...` lines).
+     - d. TODO: rerun `cpcb_subindex_study.py` once OpenAQ has post-fix NO2 overlapping CPCB snapshots; check NO2 verdicts.
    - A possible bridge: raise `MAX_INPUT_STALENESS_HOURS` 24 -> 36/48 (per 6a, skill loss from 24 h to 48 h is small: 0.32 vs 0.30 recall). But the models only reach 120 h, so an older anchor loses days 4-5; check how the API marks those days before changing it.
 2. *CPCB fallback input:* invert the stored `sub_index_hourly` (migration 0005, collected since 2026-09-27) back to ug/m3 with the official CPCB breakpoints, which are piecewise linear and so invertible within each band. Open questions to settle before use:
    - which window `Hourly_sub_index` covers (1 h or a rolling 24 h);
