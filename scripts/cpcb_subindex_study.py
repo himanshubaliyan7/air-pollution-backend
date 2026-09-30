@@ -66,6 +66,10 @@ def stats(pairs: list[tuple[float, float]], threshold: float | None) -> str:
         f"n={len(pairs):5d}  bias={err.mean():+7.1f}  MAE={np.abs(err).mean():6.1f}  "
         f"medAE={np.median(np.abs(err)):6.1f}  r={r:5.2f}  within10%={np.mean(rel <= 0.10):4.0%}"
     )
+    positive = act >= 5.0  # ratios of near-zero values are noise
+    if positive.sum() >= 10:
+        ratio = est[positive] / act[positive]
+        out += f"  ratio med={np.median(ratio):.3f} IQR={np.percentile(ratio, 25):.3f}-{np.percentile(ratio, 75):.3f}"
     if threshold is not None:
         agree = np.mean((est > threshold) == (act > threshold))
         out += f"  >{threshold:g} agree={agree:4.0%} (actual>{threshold:g}: {np.mean(act > threshold):4.0%})"
