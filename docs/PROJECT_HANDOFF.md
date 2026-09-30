@@ -128,6 +128,7 @@ Delhi's pollution season starts mid-October (stubble burning) and peaks in Novem
    - integer rounding loss per band;
    - the cap at 500 (PM2.5 > 380 ug/m3 is clipped: it still flags no-go correctly, but it is a biased model input).
    Validate against CPCB's daily bulletin (24 h means) now, and against OpenAQ values once the relay returns.
+   - **Step 3 BUILT 2026-10-01 (`03be158`), see section 4.** 181 tests pass. The one failure, `test_station_activity.py::test_regions_endpoint_and_station_region_and_local_day` (TimescaleDB chunk CheckViolation inserting a forecast row in the test DB), fails the same way on the previous commit: pre-existing and test-only, to investigate. Deploy: rebuild with `db-migrate` (migration 0006), then `scripts/backfill_cpcb_readings.py --since 2026-09-27`.
 3. If it validates: use it as a model input *only when OpenAQ has nothing fresher*, record the source per row, and keep every staleness rule. Section 4's rule "CPCB feed never feeds the models" changes only for inverted hourly values that pass validation. Success: forecast coverage >= 60 stations without OpenAQ.
 
 **P1: verdict quality before the peak** (weeks of Oct 5 and Oct 12)
