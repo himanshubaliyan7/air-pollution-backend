@@ -32,7 +32,6 @@ from db.session import get_session
 from models.exceedance import load_thresholds
 
 FEED_IDS = {"PM2.5": Pollutant.PM25, "NO2": Pollutant.NO2}
-HOUR = timedelta(hours=1)
 MIN_HOURS_FOR_24H = 18
 
 
@@ -123,25 +122,31 @@ def main() -> None:
             if not hours:
                 continue
             seen += 1
-            end_hour = s.source_updated_at - HOUR  # start of the hour ending at lastupdate
+            # lastupdate is a whole IST hour (= :30 UTC) while OpenAQ hours start on the
+            # whole UTC hour, so offsets are tested in half-hour steps; a label is the
+            # start of the OpenAQ hour relative to lastupdate.
+            base = key(s.source_updated_at)
             hourly, is_capped = invert(s.sub_index_hourly)
             capped += is_capped
-            for lag in range(-3, 3):
-                actual = hours.get(key(end_hour + lag * HOUR))
+            for step in range(-8, 5):
+                actual = hours.get(base + step)
                 if actual is not None and not is_capped:
-                    tests[f"hourly_sub_index vs hour ending at lastupdate {lag:+d}h"].append((hourly, actual))
-            window = [hours.get(key(end_hour - i * HOUR)) for i in range(24)]
-            window = [v for v in window if v is not None]
-            if len(window) >= MIN_HOURS_FOR_24H:
+                    tests[f"hourly vs hour starting at lastupdate {step / 2:+.1f}h"].append((hourly, actual))
+            for step in (-3, -1):  # the last full UTC hour before / straddling lastupdate
+                window = [hours.get(base + step - 2 * i) for i in range(24)]
+                window = [v for v in window if v is not None]
+                if len(window) < MIN_HOURS_FOR_24H:
+                    continue
                 mean24, max24, min24 = float(np.mean(window)), max(window), min(window)
+                tag = f"24h ending {step / 2 + 1:+.1f}h"
                 if not is_capped:
-                    tests["hourly_sub_index vs trailing 24h mean"].append((hourly, mean24))
+                    tests[f"hourly vs mean of {tag}"].append((hourly, mean24))
                 for label, sub, actual in (("avg", s.sub_index_avg, mean24), ("max", s.sub_index_max, max24),
                                            ("min", s.sub_index_min, min24)):
                     if sub is not None:
                         value, c = invert(sub)
                         if not c:
-                            tests[f"{label:3s} sub-index vs trailing 24h {label}"].append((value, actual))
+                            tests[f"{label} vs {label} of {tag}"].append((value, actual))
         print(f"\n== {feed_id} ({pollutant.value}): snapshots with sensor history {seen}, hourly sub-index at cap {capped}")
         for name in sorted(tests):
             print(f"  {name:52s} {stats(tests[name], threshold)}")
