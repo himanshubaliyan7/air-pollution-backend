@@ -42,6 +42,20 @@ Read this first in a new chat. It is the complete state of the project: goal, wh
   - cleanup: worktrees, the `airpollution_{sub,qa,dba,ops}_test` DBs;
   - investigate the pre-existing failing integration test `test_regions_endpoint_and_station_region_and_local_day` (TimescaleDB chunk CheckViolation, test DB only).
 
+- **F. UI overhaul: a "Google Earth"-style globe (owner request 2026-10-01; runs in parallel with A-E).**
+  - Decisions: **MapLibre GL (globe projection) + deck.gl**, chosen over Cesium + Google photorealistic tiles because it is free (no billing account) and fast on phones.
+  - Order: session-9 checks first, then a **clickable prototype**: a globe that flies into Delhi NCR, with the live stations coloured by CPCB category.
+  - Vision:
+    - the site opens on a slowly turning globe and flies into the region;
+    - stations are markers or 3D columns (colour = CPCB category, height = PM2.5); no-data stations are grey and hatched, never green;
+    - an interpolated haze layer;
+    - a time slider now -> +5 days that animates the forecast;
+    - wind streaks from our weather data;
+    - tapping a station opens a panel (AQI now, 5-day go/no-go, chart, subscribe); a bottom sheet on phones.
+  - Backend needs: a **bulk endpoint** (all stations' current AQI + outlook in one call, instead of ~170 requests); later a wind-field endpoint.
+  - Frontend: the air-clear repo (TanStack Start; there is no map library today), deployed to Cloudflare Workers. Claude builds it, since Lovable's credits are gone.
+  - Imagery licence must suit a non-commercial portfolio; check it before choosing a tile source.
+
 ## 0a. Earlier session results (kept for history)
 **Session 7 results (2026-09-27 ~17:45 UTC):**
 - Healthy: server (5 containers up, `/health` ok, disk 41%); backups daily through 09-27; `ingestion`, `feature_engineering`, `forecast`, `watchdog` and `station_maintenance` DAGs all succeeded; `evaluation_monitoring_dag` passed every night since the fix.
