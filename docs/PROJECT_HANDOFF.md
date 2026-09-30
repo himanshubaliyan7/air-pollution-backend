@@ -116,7 +116,7 @@ Delhi's pollution season starts mid-October (stubble burning) and peaks in Novem
    - **NO2 fix progress (2026-10-01):**
      - a. DONE: code `85ed394` (`ingestion.sources.openaq.declared_unit`) deployed (api, scheduler, webserver rebuilt) with `ingestion_dag` paused.
      - b. DONE: `scripts/fix_no2_units.py --step data` divided 424,408 NO2 rows (75 stations, 75 'ppb' sensors; 0 other NO2 rows) by 1.8816. Probe: 1.882 before, 1.0 after. `ingestion_dag` unpaused.
-     - c. RUNNING: `--step features && --step retrain` (nohup, log `~/no2_rebuild_20261001.log` on the server; the old active model ids are printed there as `ROLLBACK ...` lines).
+     - c. DONE (finished 2026-09-30 20:08 UTC): features rebuilt, and **1,312 NO2 models activated** (328 station/horizon combos x 4), 97 combos skipped for too little data (none had an active model), 0 failed, 0 old models left active. Holdout f1 = 0.000 because there are no NO2 exceedances of 181 in the monsoon holdout, which is expected (undefined, not bad). The old active ids are the `ROLLBACK ...` lines in `~/no2_rebuild_20261001.log` on the server.
      - d. TODO: rerun `cpcb_subindex_study.py` once OpenAQ has post-fix NO2 overlapping CPCB snapshots; check NO2 verdicts.
    - A possible bridge: raise `MAX_INPUT_STALENESS_HOURS` 24 -> 36/48 (per 6a, skill loss from 24 h to 48 h is small: 0.32 vs 0.30 recall). But the models only reach 120 h, so an older anchor loses days 4-5; check how the API marks those days before changing it.
 2. *CPCB fallback input:* invert the stored `sub_index_hourly` (migration 0005, collected since 2026-09-27) back to ug/m3 with the official CPCB breakpoints, which are piecewise linear and so invertible within each band. Open questions to settle before use:
