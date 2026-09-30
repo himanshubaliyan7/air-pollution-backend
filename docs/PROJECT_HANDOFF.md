@@ -119,6 +119,8 @@ A production-style service that tells **Delhi NCR schools whether outdoor practi
      7. End-to-end test: an invited address subscribes and confirms, and gets a manage link; a non-invited address gets nothing.
      8. Unpause `alert_digest_dag` (12:30 UTC = 18:00 IST daily).
      9. Later: drop sslip from `CADDY_SITE_ADDRESS` and workers.dev from CORS.
+   - **Progress 2026-09-30 (session 8):** steps 1-5 DONE and verified (`/health` ok and `open: false` on both `air-api.himanshubaliyan.dev` and sslip; CORS allows `https://air.himanshubaliyan.dev`; 85 stations served). Next: step 6 (merge air-clear PR #4, deploy, Worker custom domain), then 7-8.
+   - **Incident during step 3:** editing `docker/.env` in nano cut three long lines at the screen edge, leaving a literal `>` (`DATABASE_URL` ended `.../airpol>`). `db-migrate` then failed, so `api` and `caddy` never started: the site was down for roughly 15-30 min. Fixed by restoring the DB URLs from `docker/.env.backup-20260930` and rewriting CORS with `echo >>`. **Lesson:** after any `.env` edit run `grep -n '>' docker/.env | cut -d= -f1` (must print nothing) before recreating containers; prefer `sed`/`echo >>` over nano for long lines.
 4. **Each "day" is one forecast hour** (section 4). Design a proper daily verdict before the peak season.
 5. **If 429s from OpenAQ reappear**: persist sensor IDs to a `Station` DB column. Not needed today.
 6. **Cloudflare API token**: never persisted; generate a fresh one per frontend deploy.
