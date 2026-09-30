@@ -94,6 +94,13 @@ Delhi's pollution season starts mid-October (stubble burning) and peaks in Novem
 
 **P0: forecasts must not depend on one relay** (week of Oct 1)
 1. *Cheap check first:* are the CPCB sensors really gone from OpenAQ, or were they re-created under new location/sensor IDs? (A 5-day relay outage could be an ID migration.) If new IDs, remap them: `station_maintenance_dag` / the sensor lookup.
+   **RESULT (2026-09-30 ~16:00 UTC): no ID migration.**
+   - All 85 of our location IDs still exist in OpenAQ, and no new CPCB locations appeared in the bbox.
+   - The relay is **intermittent, not dead**. It came back, backfilled 09-25 .. 09-29 13:00 UTC (for example loc 235: 22-24 h/day), then stalled again. 71 stations have their last OpenAQ hour at 09-29 14:00 UTC.
+   - Our ingestion stored data up to 09-29 13:00 for 69 stations. 46 stations got forecasts made at 09-29 13:00 UTC; they expired about 24 h later (the staleness limit), so coverage flickered on and off unnoticed.
+   - **Data gap found:** our DB has 0 h on 09-25 and ~1-4 h on 09-26 for most CPCB stations, although OpenAQ now has those hours. The relay backfilled them after they had left `SENSOR_LOOKBACK_HOURS` = 72 (`orchestration/plugins/common/tasks.py`). Fix: one-off `python -m scripts.backfill_history --days 7 --skip-weather` on the server (owner-run). Low impact on forecasts; it matters for evaluation and training completeness.
+   - Conclusion: step 2 (a fallback that doesn't depend on OpenAQ) is still needed.
+   - A possible bridge: raise `MAX_INPUT_STALENESS_HOURS` 24 -> 36/48 (per 6a, skill loss from 24 h to 48 h is small: 0.32 vs 0.30 recall). But the models only reach 120 h, so an older anchor loses days 4-5; check how the API marks those days before changing it.
 2. *CPCB fallback input:* invert the stored `sub_index_hourly` (migration 0005, collected since 2026-09-27) back to ug/m3 with the official CPCB breakpoints, which are piecewise linear and so invertible within each band. Open questions to settle before use:
    - which window `Hourly_sub_index` covers (1 h or a rolling 24 h);
    - integer rounding loss per band;
