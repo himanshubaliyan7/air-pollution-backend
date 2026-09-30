@@ -24,6 +24,7 @@ import requests
 
 from common.constants import Pollutant, SensorSourceName
 from ingestion.sources.base import SensorReading, SensorSource, StationMetadata
+from ingestion.units import CANONICAL_UNIT
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,19 @@ INITIAL_BACKOFF_SECONDS = 2.0
 
 # OpenAQ parameter.name values line up directly with our Pollutant enum values.
 _PARAMETER_NAME_TO_POLLUTANT = {p.value: p for p in Pollutant}
+
+# Unit labels OpenAQ gets wrong. It labels the NO2 it relays from India's CPCB
+# network "ppb", but the values are CPCB's own ug/m3: CPCB's AQI feed matches
+# the raw number (ratio 1.00) and not the ppb-converted one (0.531 = 1/1.882),
+# at all 69 stations checked (scripts/cpcb_subindex_study.py, 2026-10-01).
+# Every NO2 sensor in the Delhi NCR bbox is on that network, including those
+# OpenAQ lists under provider "N/A". Re-verify before ingesting another country.
+_MISLABELLED_UNITS = {(Pollutant.NO2, "ppb"): CANONICAL_UNIT}
+
+
+def declared_unit(pollutant: Pollutant, unit: str) -> str:
+    """The unit OpenAQ's values are really in (see _MISLABELLED_UNITS)."""
+    return _MISLABELLED_UNITS.get((pollutant, (unit or "").strip()), unit)
 
 
 class OpenAQAuthError(Exception):
@@ -243,7 +257,7 @@ class OpenAQSource(SensorSource):
                         # it did in practice: this caused a real backfill's
                         # entire training run to see zero usable rows).
                         observed_at = observed_at.replace(minute=0, second=0, microsecond=0)
-                        unit = (row.get("parameter") or {}).get("units", "ug/m3")
+                        unit = declared_unit(pollutant, (row.get("parameter") or {}).get("units", "ug/m3"))
                         readings.append(
                             SensorReading(
                                 source_location_id=location_id,

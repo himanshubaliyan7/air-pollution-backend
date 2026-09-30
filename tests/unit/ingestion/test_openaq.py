@@ -2,7 +2,8 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from common.constants import Pollutant
-from ingestion.sources.openaq import OpenAQSource
+from ingestion.sources.openaq import OpenAQSource, declared_unit
+from ingestion.units import CANONICAL_UNIT, to_canonical
 
 
 class FakeResponse:
@@ -106,6 +107,45 @@ def test_fetch_readings_resolves_sensors_and_parses_hours():
     assert r.value == 145.2
     assert r.observed_at == datetime(2026, 9, 19, 0, 0, tzinfo=timezone.utc)
     assert r.source_location_id == "111"
+
+
+def test_cpcb_no2_labelled_ppb_is_kept_as_ug_m3():
+    """OpenAQ labels CPCB's NO2 "ppb" but the values are ug/m3 (CPCB's own AQI
+    feed matches the raw number); converting them overstated NO2 by 1.88x."""
+    responses = {
+        "/locations/111": FakeResponse(
+            {"id": 111, "sensors": [{"id": 9002, "parameter": {"name": "no2", "units": "ppb"}}]}
+        ),
+        "/sensors/9002/hours": FakeResponse(
+            {
+                "meta": {"found": 1},
+                "results": [
+                    {
+                        "value": 28.0,
+                        "parameter": {"name": "no2", "units": "ppb"},
+                        "period": {"datetimeFrom": {"utc": "2026-09-28T00:30:00Z"}},
+                    }
+                ],
+            }
+        ),
+    }
+    source = OpenAQSource(api_key="test-key", session=FakeSession(responses))
+
+    [r] = source.fetch_readings(
+        source_location_ids=["111"],
+        pollutants=[Pollutant.NO2],
+        start=datetime(2026, 9, 28, tzinfo=timezone.utc),
+        end=datetime(2026, 9, 29, tzinfo=timezone.utc),
+    )
+
+    assert r.unit == CANONICAL_UNIT
+    assert to_canonical(r.pollutant, r.value, r.unit) == (28.0, CANONICAL_UNIT)  # what the loader stores
+
+
+def test_only_the_known_mislabel_is_corrected():
+    assert declared_unit(Pollutant.NO2, "ppb") == CANONICAL_UNIT
+    assert declared_unit(Pollutant.NO2, "µg/m³") == "µg/m³"
+    assert declared_unit(Pollutant.PM25, "ppb") == "ppb"  # still dropped by the loader, not relabelled
 
 
 def test_fetch_readings_skips_a_sensor_that_persistently_5xxs_without_crashing():

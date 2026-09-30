@@ -1,7 +1,9 @@
 """Concentration units. Thresholds (config/thresholds_cpcb.yaml), models and the
-API all work in ug/m3, but OpenAQ publishes Delhi NO2 in ppb - stored as-is
-until 2026-09-25, which understated NO2 by ~1.9x against the ug/m3 threshold.
-Every reading is converted here, at the ingestion boundary.
+API all work in ug/m3. Every reading is converted here, at the ingestion
+boundary. A source's unit LABEL is corrected in its adapter before it gets
+here: OpenAQ labels Delhi's CPCB NO2 "ppb" although the values are ug/m3
+(ingestion.sources.openaq.declared_unit). Converting that label from
+2026-09-25 to 2026-10-01 overstated stored NO2 by 1.88x.
 """
 
 import logging

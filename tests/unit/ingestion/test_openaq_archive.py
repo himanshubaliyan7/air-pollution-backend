@@ -2,6 +2,7 @@ from datetime import date, datetime, timezone
 
 from common.constants import Pollutant
 from ingestion.sources.openaq_archive import day_url, parse_day
+from ingestion.units import CANONICAL_UNIT
 
 # Real rows from the archive for location 8118 on 2026-04-15 (plus a second
 # PM2.5 sensor and a pollutant we do not model).
@@ -25,7 +26,8 @@ def test_period_end_maps_to_the_api_period_start_hour():
 def test_keeps_only_the_live_pipelines_sensor_and_modelled_pollutants():
     rows = parse_day(CSV, "8118", {Pollutant.PM25: 23534, Pollutant.NO2: 23535})
     assert sorted((r.pollutant.value, r.value) for r in rows) == [("no2", 21.5), ("pm25", 71.0), ("pm25", 72.0)]
-    assert next(r for r in rows if r.pollutant == Pollutant.NO2).unit == "ppb"  # converted later, by the loader
+    # OpenAQ's "ppb" label on this network's NO2 is wrong; the value is already ug/m3.
+    assert next(r for r in rows if r.pollutant == Pollutant.NO2).unit == CANONICAL_UNIT
 
 
 def test_without_sensor_map_all_modelled_rows_are_kept():

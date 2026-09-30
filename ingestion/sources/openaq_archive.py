@@ -31,6 +31,7 @@ import requests
 
 from common.constants import Pollutant
 from ingestion.sources.base import SensorReading
+from ingestion.sources.openaq import declared_unit
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,7 @@ def parse_day(raw_csv: str, location_id: str, sensor_ids: dict[Pollutant, int] |
             source_location_id=str(location_id),
             pollutant=pollutant,
             value=sum(values) / len(values),
-            unit=units[(pollutant, sensor_id, start)],
+            unit=declared_unit(pollutant, units[(pollutant, sensor_id, start)]),
             observed_at=start.replace(minute=0, second=0, microsecond=0),
             source_record_id=f"{sensor_id}:{start:%Y-%m-%dT%H:%M:%SZ}",
         )
