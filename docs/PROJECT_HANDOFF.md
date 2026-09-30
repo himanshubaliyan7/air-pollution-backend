@@ -87,6 +87,36 @@ A production-style service that tells **Delhi NCR schools whether outdoor practi
 - Spend: launching 7 agents at once hit the owner's monthly limit once. Ask before launching teams.
 - GitGuardian flagged a placeholder password once — false positive, fixed, real secrets were never in the repo. The live cloud instance's Postgres/Airflow secrets are freshly generated and were never in git or in `docker/.env` locally.
 
+## 5a. NEXT PHASE: Phase 6 "winter readiness" (planned 2026-09-30, session 8)
+Delhi's pollution season starts mid-October (stubble burning) and peaks in November, which is when the service matters. Target: all of P0 and P1 deployed by **~2026-10-18**.
+
+**Status on 2026-09-30 ~15:30 UTC (public API):** current AQI fresh at 67/85 stations (CPCB direct feed works). **Forecasts only at 7/85** (PM2.5: 6 no-go, 1 go; 78 no-data): OpenAQ's CPCB relay has been down since 2026-09-25, 5 days. The one point of failure is now the forecast input.
+
+**P0: forecasts must not depend on one relay** (week of Oct 1)
+1. *Cheap check first:* are the CPCB sensors really gone from OpenAQ, or were they re-created under new location/sensor IDs? (A 5-day relay outage could be an ID migration.) If new IDs, remap them: `station_maintenance_dag` / the sensor lookup.
+2. *CPCB fallback input:* invert the stored `sub_index_hourly` (migration 0005, collected since 2026-09-27) back to ug/m3 with the official CPCB breakpoints, which are piecewise linear and so invertible within each band. Open questions to settle before use:
+   - which window `Hourly_sub_index` covers (1 h or a rolling 24 h);
+   - integer rounding loss per band;
+   - the cap at 500 (PM2.5 > 380 ug/m3 is clipped: it still flags no-go correctly, but it is a biased model input).
+   Validate against CPCB's daily bulletin (24 h means) now, and against OpenAQ values once the relay returns.
+3. If it validates: use it as a model input *only when OpenAQ has nothing fresher*, record the source per row, and keep every staleness rule. Section 4's rule "CPCB feed never feeds the models" changes only for inverted hourly values that pass validation. Success: forecast coverage >= 60 stations without OpenAQ.
+
+**P1: verdict quality before the peak** (weeks of Oct 5 and Oct 12)
+4. *Owner decision needed:* what does "no-go" mean?
+   - Today it means one forecast hour > 91 ug/m3.
+   - CPCB's "Poor" band is a 24 h mean >= 91.
+   - In last winter's test, 89% of station-days were bad, so either definition says "no-go" almost every day in Nov.
+   - Options: (a) keep hourly; (b) switch to the 24 h mean (matches CPCB); (c) graded verdicts (Poor / Very Poor / Severe) so winter days are still told apart.
+5. *Daily verdict redesign (section 4 caveat):* replace "one forecast hour per day" with per-day targets: daily-mean and/or daily-max models, 5 horizons, on the local (IST) day. This is cheaper than hourly horizons (85 x 2 x 120 models). Backtest on the winter window with `scripts/winter_eval.py` before promoting.
+6. Re-check the no-go share and probability calibration once coverage is back. Then set `exceedance_probability_decision_threshold` from the winter reliability curve, not the monsoon one.
+
+**P2: operations**
+7. Go-live step 9 (~Oct 3): drop sslip from `CADDY_SITE_ADDRESS` and workers.dev from CORS.
+8. Alert when a digest run fails or sends 0 emails while there are confirmed subscribers (Telegram).
+9. Cleanup: obsolete worktrees, `airpollution_{sub,qa,dba,ops}_test` DBs, air-clear PR #5 (deploy-script fix) merge.
+
+**Later (Phase 7):** multi-region (`docs/multi_region_plan.md`); decide whether `/model-health` stays public; demo mode stays (the project is non-commercial).
+
 ## 6. Next steps, in priority order
 1. **Section 0 checks** first.
 2. **New models' verdicts** (open question). After the 2026-09-25 retrain, PM2.5 was no-go at 55 of 59 stations with a verdict (26 before).
