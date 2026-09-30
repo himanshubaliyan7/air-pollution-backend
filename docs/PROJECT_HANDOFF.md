@@ -1,19 +1,48 @@
-# Project handoff (written 2026-09-22; rewritten 2026-09-25, end of session 5; updated 2026-09-25, end of session 6)
+# Project handoff (written 2026-09-22; rewritten 2026-09-25, end of session 5; updated 2026-09-30, end of session 8)
 
 Read this first in a new chat. It is the complete state of the project: goal, what exists, how it was built, what went wrong, and what to do next. Auto-memory (`MEMORY.md`) holds the same facts in shorter form. **No secrets are in this file.**
 
-## 0. START HERE: checks for the next session
-The owner was away for 1-2 days after session 6 (from 2026-09-25 ~09:30 UTC). The backend was left running unattended, with nothing pending on it. Run these first, in order, before new work:
-1. **Server health**: `ssh air-pollution-backend`; `sudo docker ps` (5 up: postgres, api, caddy, airflow-scheduler, airflow-webserver); `curl -s https://137-23-49-72.sslip.io/api/v1/health`; `df -h /` (39% on 2026-09-25).
-2. **DAG runs since 2026-09-25**: for each DAG, `sudo docker exec docker-airflow-scheduler-1 airflow dags list-runs -d <dag> -o plain | head`. Expect hourly successes. Investigate any `failed`: Telegram should have alerted too.
-3. **Weekly retrain (Sun 2026-09-27 00:00 UTC)**: first run with the full-year data and the `bfc53b1` fix. Check it succeeded, and how many models it promoted over the 2026-09-25 force-promoted set (`select count(*) from model_runs where is_active and trained_at > '2026-09-26'`).
-4. **Old/new model mix gone** (fix `7268c4e`, deployed 2026-09-25 09:02 UTC): no station/pollutant should have more than one `model_id` per horizon at its latest `forecast_made_at` (query in section 6a).
-5. **Re-check the verdicts** (open question, section 6 item 2): count `overall_recommendation` over all stations (loop over `/stations`, then `/forecast/{id}/exceedance?pollutant=pm25|no2`). On 2026-09-25 PM2.5 was no-go at 55 of 59 stations with a verdict, partly inflated by the mix in item 4. If near-universal no-go persists, decide with the owner: raise `exceedance_probability_decision_threshold` (config only), use only days 1-3 for the overall verdict, or keep.
-6. **Nightly evaluation**: `evaluation_monitoring_dag` should pass. A drift alarm now means real exceedances were missed; it was previewed read-only for the first night and would not have fired.
-7. **Backups**: `tail -3 ~/backups/backup.log`, and a new dump for each day.
-8. **Current CPCB feed**: `current_aqi_dag` succeeded most hours (data.gov.in published an empty feed for one hour on 2026-09-25; that is upstream).
-9. Then ask the owner whether the **domain** is ready: Phase 4 go-live (section 6 item 3).
+## 0. START HERE: session 9 (planned 2026-10-01)
+**State at the end of session 8 (2026-09-30 ~21:00 UTC = 10-01 02:30 IST):**
+- **Phase 4 is LIVE in demo mode:** frontend https://air.himanshubaliyan.dev, API https://air-api.himanshubaliyan.dev (sslip still works too). Double opt-in works; a non-invited address gets nothing (verified). The daily digest runs 12:30 UTC (18:00 IST), and the first one arrived.
+- **NO2 unit bug fixed:** OpenAQ labels CPCB NO2 "ppb", but the values are ug/m3. Code `85ed394` is deployed. 424,408 stored rows were divided by 1.8816, and the probe went 1.882 -> 1.0. 1,312 NO2 models were retrained on the corrected data and force-activated. Details in section 5a.
+- **CPCB fallback input deployed** (`03be158`, migration 0006): `current_aqi_dag` now stores CPCB's hourly PM2.5/NO2 as readings (source `CPCB`), and OpenAQ wins any hour both hold.
+  - Backfill: 9,341 readings since 09-27. 74 stations had PM2.5 readings on 09-30; 65 had one at 19:00 UTC.
+  - **Not yet seen producing forecasts:** the 20:45 UTC forecast run ran before the deploy. The first run with the new code was due at 21:45 UTC. Coverage was 7/85 before.
+- OpenAQ's CPCB relay: stalled again since 09-29 13:00 UTC (it is intermittent, not dead). The 09-25/26 gap was backfilled where OpenAQ has the data.
 
+**First checks tomorrow, in order:**
+1. **Did the fallback restore forecasts?** Count current verdicts: loop `/stations`, then `/forecast/{id}/exceedance?pollutant=pm25|no2`, and count `overall_recommendation` where `is_current`. Expect about 60+ PM2.5 stations (was 7). If it is still ~7:
+   - check `forecast_dag`'s latest log for skips;
+   - check that `current_aqi_dag`'s log line includes `cpcb_readings` > 0;
+   - check that `/forecast/{id}/history` shows recent hours.
+2. **NO2 forecasts** should now appear at CPCB stations, from the corrected models. Outside winter, expect mostly `go`: NO2 rarely nears 181 ug/m3.
+3. **Health:**
+   - 5 containers up; `current_aqi_dag`, `forecast_dag`, `ingestion_dag`, `watchdog_dag` succeeding;
+   - the watchdog's `forecast-coverage-low` should have sent "resolved" on Telegram (ask the owner);
+   - `sensor-data-stale` can keep firing while OpenAQ is stalled (it deliberately tracks OpenAQ only);
+   - backups: `tail -3 ~/backups/backup.log`.
+4. **Digest** at 18:00 IST: it should cover more stations now.
+5. The PM2.5 no-go share on the new coverage feeds the P1 decision below.
+
+**Plan (Phase 6 "winter readiness", target ~2026-10-18; details in section 5a):**
+- **A. Close P0.**
+  - Confirm the coverage (check 1).
+  - When OpenAQ's relay delivers post-fix NO2, rerun `scripts/cpcb_subindex_study.py`: NO2 should now show ratio ~1.0 (final proof of the unit fix).
+  - Watch that CPCB-filled hours don't distort the evaluation (`/model-health`).
+- **B. Owner decision (P1 item 4):** what "no-go" means.
+  - (a) keep one hour > 91;
+  - (b) the 24 h mean >= 91 (CPCB "Poor");
+  - (c) **graded verdicts Poor / Very Poor / Severe (recommended)**, so winter days stay distinguishable.
+- **C. Build P1 item 5:** per-day targets (daily mean and/or daily max on the IST day, 5 horizons) instead of "one forecast hour per day". Backtest with `scripts/winter_eval.py` before promoting.
+- **D. P1 item 6:** recalibrate `exceedance_probability_decision_threshold` on winter data.
+- **E. P2:**
+  - ~Oct 3: go-live step 9 (drop sslip from `CADDY_SITE_ADDRESS` and workers.dev from CORS);
+  - Telegram alert when a digest run fails or sends 0 emails;
+  - cleanup: worktrees, the `airpollution_{sub,qa,dba,ops}_test` DBs;
+  - investigate the pre-existing failing integration test `test_regions_endpoint_and_station_region_and_local_day` (TimescaleDB chunk CheckViolation, test DB only).
+
+## 0a. Earlier session results (kept for history)
 **Session 7 results (2026-09-27 ~17:45 UTC):**
 - Healthy: server (5 containers up, `/health` ok, disk 41%); backups daily through 09-27; `ingestion`, `feature_engineering`, `forecast`, `watchdog` and `station_maintenance` DAGs all succeeded; `evaluation_monitoring_dag` passed every night since the fix.
 - Weekly retrain (09-27 00:00 UTC) succeeded: it promoted 1,900 of 2,052 new models. No old/new model mix.
@@ -61,6 +90,13 @@ A production-style service that tells **Delhi NCR schools whether outdoor practi
    - ran a winter test and retrained and force-promoted all models;
    - built Phase 4: double opt-in + daily digest + retention (backend PR #1, merged and deployed dormant) and the four frontend pages (air-clear PR #4, open). Verified end to end locally (MailHog + Chrome).
    Details are in sections 5, 6 and 6a.
+6. **Session 7** (2026-09-27): rode out a CPCB relay outage; added the `forecast-coverage-low` watchdog issue; current AQI switched to CPCB's own CAAQMS feed (data.gov.in as fallback).
+7. **Session 8** (2026-09-30/10-01):
+   - Phase 4 go-live on `himanshubaliyan.dev` in demo mode;
+   - planned Phase 6 (section 5a); found OpenAQ's relay is intermittent, and backfilled the 09-25/26 gap;
+   - proved CPCB's hourly sub-index = the hourly concentration;
+   - found and fixed the NO2 unit bug (data, code, models);
+   - built and deployed the CPCB fallback input.
 
 ## 4. Key design decisions and why
 - Forecast models use hourly ug/m3 history only. The CPCB feed is **AQI sub-indices**. Until 2026-10-01 it powered current conditions only.
@@ -86,6 +122,8 @@ A production-style service that tells **Delhi NCR schools whether outdoor practi
 - **CPCB breakpoints verified against the official source (2026-09-25)** (cpcb.gov.in "About National Air Quality Index" PDF): all PM2.5/NO2 bands match. The check found that `get_aqi_category` labelled values *between* CPCB's integer ranges (90.5, 120.5 ug/m3) as "good" - 22 live forecasts were affected (per-day label only, not the verdict). Fixed in `af7c3d6`, deployed, and every live forecast day was re-checked against the official bands with 0 mismatches.
 - **Session 6 bugs (2026-09-25), all fixed and tested - don't reintroduce:** NO2 stored in ppb but compared with ug/m3 thresholds (`6693c29`); current-conditions freshness shared the forecast staleness constant, so raising it would have served day-old CPCB readings as "now" (`2adf3cf`); None-F1 crashed `promote_if_better` (weekly retrain) (`bfc53b1`); after a retrain, forecast rows from old and new models coexisted at an unchanged anchor and the outlook took the worst of both (`7268c4e`); the S3 archive stamps periods at their END and some stations publish 15-minute data (`12dd226`, verified value-for-value against API rows).
 - **Forking worker processes must not inherit a pooled DB connection** ("lost synchronization with server"): `get_engine().dispose()` before `mp.Pool` and in a worker initializer. The first forced-retrain attempt crashed on this (no models written).
+- **Don't trust a provider's unit label; check it against an independent source.** OpenAQ labels CPCB NO2 "ppb", but the values are ug/m3. The 2026-09-25 "fix" converted them and overstated NO2 by 1.88x for 5 days. CPCB's own AQI feed exposed it (ratio 0.531 = 1/1.882). Before changing units, compare against a second source.
+- **Editing long `docker/.env` lines in nano can truncate them to a literal `>`** (took the site down 2026-09-30). After any edit: `grep -n '>' docker/.env | cut -d= -f1` must print nothing.
 - **The auto-mode permission check blocks some server actions** (compose rebuilds, mass UPDATEs of production rows, killing processes). The owner runs those; give them exact commands.
 - A phase report's own "type check is clean" claim was wrong once (Lovable Phase 5) — always actually run `tsc --noEmit` and the test suite myself before approving, never trust the report alone.
 - Spend: launching 7 agents at once hit the owner's monthly limit once. Ask before launching teams.
