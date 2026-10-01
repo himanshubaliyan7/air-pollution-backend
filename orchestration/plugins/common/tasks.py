@@ -281,7 +281,15 @@ def refresh_station_activity(max_dark_days: int = MAX_DARK_DAYS) -> dict[str, in
 
 # --------------------------------------------------------- feature engineering
 
-def compute_and_write_features(lookback_hours: int = 6) -> int:
+# The same window ingestion re-reads: a reading that arrives hours late (CPCB data
+# via OpenAQ trails by ~12 h, and the relay can stall for a day or more) must
+# still get its feature row, because training reads only the `features` table.
+# With the 6 h window used until 2026-10-01 such hours stayed all-NaN for good
+# and silently dropped out of every later retrain. Rows are upserted.
+FEATURE_LOOKBACK_HOURS = SENSOR_LOOKBACK_HOURS
+
+
+def compute_and_write_features(lookback_hours: int = FEATURE_LOOKBACK_HOURS) -> int:
     session = get_session()
     try:
         stations = _active_stations(session)

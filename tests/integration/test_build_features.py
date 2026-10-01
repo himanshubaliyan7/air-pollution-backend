@@ -92,3 +92,38 @@ def test_build_feature_frame_cold_start_station_returns_nan_not_error(db_session
 
     assert len(frame) == 1
     assert frame.index[0] == pd.Timestamp(as_of)
+
+
+def test_late_readings_still_get_feature_rows_for_training(db_session, monkeypatch):
+    """Regression (2026-10-01): the hourly run rewrote only the last 6 hours, but
+    readings arrive up to days late. Their feature rows stayed all-NaN for good,
+    so those hours never reached training (which reads only `features`)."""
+    from features.feature_store import read_features
+    from orchestration.plugins.common import tasks
+    from tests.clock import fixed_datetime
+
+    station_id, _, _ = _seed_station(db_session, station_id="openaq:late")
+    now = datetime(2026, 9, 30, 12, 20, tzinfo=timezone.utc)
+    monkeypatch.setattr(tasks, "datetime", fixed_datetime(now))
+    hour = now.replace(minute=0)
+
+    def add_readings(first_hours_ago, last_hours_ago):
+        for h in range(last_hours_ago, first_hours_ago + 1):
+            db_session.add(RawSensorReading(
+                station_id=station_id, pollutant=Pollutant.PM25, observed_at=hour - timedelta(hours=h),
+                source=SensorSourceName.OPENAQ, value=40.0 + h, unit="ug/m3", ingested_at=now,
+            ))
+        db_session.commit()
+
+    def complete_lag_hours():
+        frame = read_features(db_session, station_id, Pollutant.PM25, hour - timedelta(hours=200), hour)
+        lags = frame[[c for c in frame.columns if c.startswith("lag_")]]
+        return {int((hour - t).total_seconds() // 3600) for t in lags.dropna().index}
+
+    add_readings(120, 30)  # the relay stalled 30 hours ago
+    tasks.compute_and_write_features()
+    assert complete_lag_hours() == set(range(30, 72))
+
+    add_readings(29, 13)  # it catches up to the usual ~12 h lag
+    tasks.compute_and_write_features()
+    assert complete_lag_hours() == set(range(13, 72))
