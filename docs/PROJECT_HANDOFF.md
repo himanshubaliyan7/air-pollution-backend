@@ -3,51 +3,60 @@
 Read this first in a new chat. It is the complete state of the project: goal, what exists, how it was built, what went wrong, and what to do next. Auto-memory (`MEMORY.md`) holds the same facts in shorter form. **No secrets are in this file.**
 
 ## 0. START HERE: session 10
-**State at the end of session 9 (2026-10-01 ~12:15 UTC = 17:45 IST). Four commits are pushed but NOT deployed: `037bd38`, `c4c079b`, `3c03114`, `4b6f1ec`.**
+**State at the end of session 9 (2026-10-01 ~13:10 UTC = 18:40 IST). `037bd38`, `c4c079b`, `3c03114`, `4b6f1ec` are DEPLOYED (owner, ~12:45 UTC). `6f0e793` adds `scripts/train_missing_models.py`: scripts only, a `git pull` on the server is enough.**
 
 **Session 9 check results (public API, 2026-10-01 11:52 UTC):**
 - **The CPCB fallback works.** PM2.5 verdicts at **52 stations** (48 no-go, 4 go), up from 7. NO2 at **43** (41 go, 2 no-go), up from 0. Most forecasts were made from an hour less than 3 h old. API `/health` ok; 67 stations have current AQI.
 - **Below the 60+ target. Causes of the 33 PM2.5 no-data stations:**
-  - **15: live CPCB PM2.5 but no PM2.5 model** (e.g. Mandir Marg, Punjabi Bagh, Patparganj, Lodhi Road, Najafgarh). Most of them do have NO2 forecasts. Cause not yet known: it needs the database (`scripts/coverage_diagnosis.py`, step 4 below).
-  - **9 entries (7 CPCB stations): the CPCB feed was matched to the wrong station or to none.** FIXED in `037bd38`, not deployed.
+  - **15: live CPCB PM2.5 but no PM2.5 model** (e.g. Mandir Marg, Punjabi Bagh, Patparganj, Lodhi Road, Najafgarh). Most of them do have NO2 forecasts. Cause found later the same day: see "What the diagnosis showed" below.
+  - **9 entries (7 CPCB stations): the CPCB feed was matched to the wrong station or to none.** FIXED in `037bd38`.
     - Anand Vihar and ITO have two OpenAQ entries each on one point. CPCB data went to the dead duplicate (`openaq:5509`, `openaq:10489`), which has no models; the live entries (`openaq:235`, `openaq:5613`) got nothing.
     - Pusa DPCC, Pusa IMD, Aya Nagar, North Campus and Sector-1 Noida matched nothing: OpenAQ places them 1.2-6.5 km from CPCB's coordinates.
-  - **4: model exists, PM2.5 data is fresh, still no forecast** (Ashok Vihar, Alipur, Sector 11 Faridabad, Manesar). Likely gaps in the lag hours: one missing hour among lags 1/3/6/12/24/48 blocks the forecast. See plan item C.
+  - **4: model exists, PM2.5 data is fresh, still no forecast** (Ashok Vihar, Alipur, Sector 11 Faridabad, Manesar). Long CPCB outages, see below.
   - 1: Indirapuram has a model for the 24 h horizon only.
   - 4: no CPCB station and no fresh OpenAQ data (MD University Rohtak, New Industrial Town Faridabad, "New Delhi", Ved Vihar-Loni).
 - **The two NO2 no-go verdicts are false** (Sanjay Nagar Ghaziabad, NSIT Dwarka). One horizon's upper-quantile model predicts 386 / 292 ug/m3 where the 90-day observed maximum is 117 / 178 and nothing ever exceeded 181. Probability 0.37 / 0.31, just over the 0.3 threshold. Not fixed: it belongs to plan item D.
-- **Not checked (auto mode blocks ssh reads of production):** containers, DAG runs, backups, the watchdog's "resolved" message, the 18:00 IST digest. The owner should check these (step 5 below).
+- **Not checked (auto mode blocks ssh reads of production):** DAG runs, backups, the watchdog's "resolved" message, the 18:00 IST digest. All 5 containers started cleanly at the deploy.
 
 **Built in session 9:**
 - `037bd38` **Station matching** (`ingestion/loaders/aqi_snapshot_loader.py::match_station`): among several stations within 250 m the one with the newest OpenAQ reading wins; with none within 250 m, the same site name and operator within 10 km matches (IITM = IMD). Checked against the live feed: 66 matches unchanged, 7 changed, no two feed stations on one of ours.
 - `c4c079b` **Feature refresh window 6 h -> 72 h.** The hourly feature run rewrote only the last 6 hours, but readings arrive later than that. Those hours stayed all-NaN in `features`, and training reads only that table, so they dropped out of every retrain since the last manual rebuild.
-- `3c03114` **Owner-run scripts:** `merge_duplicate_station.py`, `rebuild_features.py`, `coverage_diagnosis.py` (read-only).
+- `3c03114`, `6f0e793` **Owner-run scripts:** `merge_duplicate_station.py`, `rebuild_features.py`, `coverage_diagnosis.py` (read-only), `train_missing_models.py`.
 - `4b6f1ec` **`GET /api/v1/overview`**: every active station's current AQI and both outlooks in one response (4 queries; `Cache-Control: public, max-age=120`). The per-station endpoints' own code produces each part. This is the backend half of plan item F.
-- Tests: 195 pass (the one known failure is still deselected).
+- Tests: 196 pass (the one known failure is still deselected).
 
-**Deploy steps (owner-run on the server; use a :50-:58 or :20-:28 UTC window; no migration):**
-1. Deploy the code:
-   `cd ~/air-pollution-backend && git pull && cd docker && sudo docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --force-recreate --build api airflow-scheduler airflow-webserver`
-2. Move the stored CPCB data off the two duplicates. Each command first without `--apply` (report only), then with it:
-   `cd ~/air-pollution-backend`
-   `sudo docker exec -i docker-airflow-scheduler-1 python - --dead openaq:5509 --live openaq:235 --apply < scripts/merge_duplicate_station.py`
-   `sudo docker exec -i docker-airflow-scheduler-1 python - --dead openaq:10489 --live openaq:5613 --apply < scripts/merge_duplicate_station.py`
-   The script refuses if the pair is more than 250 m apart or if `--live` lacks the newer OpenAQ history.
-3. Rebuild the features the 6 h window missed (a few minutes):
-   `sudo docker exec -i docker-airflow-scheduler-1 python - --days 14 < scripts/rebuild_features.py`
-4. Run the diagnosis and paste the output into the next chat:
-   `sudo docker exec -i docker-airflow-scheduler-1 python - < scripts/coverage_diagnosis.py`
-5. Health: `sudo docker ps`, `tail -3 ~/backups/backup.log`, and whether Telegram showed `forecast-coverage-low` "resolved".
+**Done on the server on 2026-10-01 (owner):**
+- Code deployed ~12:45 UTC; `GET /api/v1/overview` answers (83 stations, 181 KB, about 2 s).
+- Duplicates merged: `openaq:5509` -> `openaq:235` (808 snapshots moved, 175 CPCB readings) and `openaq:10489` -> `openaq:5613` (810 and 173). Both dead entries are inactive.
+- `rebuild_features.py --days 14`: 53,246 rows.
+- `coverage_diagnosis.py` run at 12:52 UTC. Result below.
+
+**What the diagnosis showed (PM2.5: 45 complete, 8 with some horizons, 15 without a model, 6 with a model but no fresh forecast, 9 stale):**
+- **The 15 stations without a PM2.5 model have plenty of history** (3,700-6,500 complete feature rows) **but only 95-170 in the holdout** (the last 30 days). Their data resumed on 2026-09-21/22 after the long upstream outage. At the 09-25 retrain the holdout therefore held no feature row with a known label for the longer horizons (a 24 h label at best), and `train.py` skips a combination whose holdout is empty. The 8 stations with a `[24]`-only PM2.5 model and the 16 with partial NO2 models are the same effect. Every retrain since then saw all-NaN feature rows (the 6 h window), so nothing healed.
+- The feature rebuild has now filled the holdout. **Next step: `scripts/train_missing_models.py`** (below). It trains only combinations without an active model.
+- **The "model but no fresh forecast" stations are not short gaps.** Alipur, Manesar, Ashok Vihar and Sector 11 Faridabad had CPCB outages of 16-20 h or came back less than 48 h ago; a forecast needs every lag up to 48 h. They recover by themselves. Measured on the public history: filling gaps of up to 2 h would raise "newest hour usable" from 56 to 63 of 74 stations, but a forecast up to 24 h old is served anyway and the median station already has 22 of 24 usable hours. So gap-tolerant features are not worth a model-input change now.
+- The five name-matched stations (Pusa x2, Aya Nagar, North Campus, Sector-1 Noida) still showed 0 CPCB readings at 12:52: the first `current_aqi_dag` run with the new matcher was 13:40 UTC. They need about 48 h of readings before they can forecast.
+- NO2 at 8 stations is "no readings": private sensors that only measure PM2.5. Expected.
+
+**Owner steps still to run (server; any time except :40-:50):**
+1. `cd ~/air-pollution-backend && git pull`
+2. Report first, then train (about 200 combinations, roughly 10 minutes):
+   `sudo docker exec -i docker-airflow-scheduler-1 python - < scripts/train_missing_models.py`
+   `sudo docker exec -i docker-airflow-scheduler-1 python - --apply < scripts/train_missing_models.py`
+3. Health (two commands, not one line with a comma): `sudo docker ps` and `tail -3 ~/backups/backup.log`. Also: did Telegram show `forecast-coverage-low` "resolved"?
 
 **First checks in session 10:**
-1. `curl -s https://air-api.himanshubaliyan.dev/api/v1/overview` works, and Anand Vihar (`openaq:235`) and ITO (`openaq:5613`) have a PM2.5 verdict. Expect about 54 PM2.5 stations at once. The five name-matched stations need about 48 h of CPCB readings before their lags are complete, then about 58.
-2. Read the diagnosis output for the 15 stations without a PM2.5 model. If the cause is "no complete features", step 3 above plus a retrain fixes it. If it is "nothing in holdout" (too little history), they need a pooled or shorter-holdout model: decide then.
+1. `curl -s https://air-api.himanshubaliyan.dev/api/v1/overview` and count `outlooks[].overall_recommendation`. At 13:01 UTC: PM2.5 52 with a verdict (45 with all 5 days), NO2 43.
+   - Anand Vihar (`openaq:235`) and ITO (`openaq:5613`) should have a PM2.5 verdict from the 13:45 UTC run on.
+   - After `train_missing_models.py --apply`: expect about 65-70 PM2.5 stations with a verdict, and far fewer "partial days".
+   - From about 2026-10-03 14:00 UTC the five name-matched stations should join.
+2. **Check the new models' verdicts before trusting them.** Their holdout is tiny (tens of rows), so their stored metrics mean little. Compare their no-go share with neighbouring stations.
 3. The weekly retrain runs Sunday 2026-10-04 00:00 UTC. It is the first one to see the rebuilt features: check how many models it promotes.
 4. All API paths start with `/api/v1` (`/health` alone returns 404).
 
 **Plan (Phase 6 "winter readiness", target ~2026-10-18; details in section 5a):**
 - **A. Close P0.**
-  - Coverage is 52 PM2.5 stations (session 9). Deploy the matching fix and resolve the 15 stations without a PM2.5 model to pass 60.
+  - Coverage is 52 PM2.5 stations (session 9). The matching fix is deployed; `train_missing_models.py --apply` should take it past 60.
   - When OpenAQ's relay delivers post-fix NO2, rerun `scripts/cpcb_subindex_study.py`: NO2 should now show ratio ~1.0 (final proof of the unit fix).
   - Watch that CPCB-filled hours don't distort the evaluation (`/model-health`).
 - **B. Owner decision (P1 item 4):** what "no-go" means.
@@ -55,7 +64,8 @@ Read this first in a new chat. It is the complete state of the project: goal, wh
   - (b) the 24 h mean >= 91 (CPCB "Poor");
   - (c) **graded verdicts Poor / Very Poor / Severe (recommended)**, so winter days stay distinguishable.
 - **C. Build P1 item 5:** per-day targets (daily mean and/or daily max on the IST day, 5 horizons) instead of "one forecast hour per day". Backtest with `scripts/winter_eval.py` before promoting.
-  - Do it together with **gap-tolerant features**: today one missing hour among lags 1/3/6/12/24/48 blocks a station's forecast (4 stations on 2026-10-01). Filling short gaps changes the features, so it needs the same retrain and backtest.
+  - **Make the holdout robust at the same time:** `train.py` skips a combination when the last 30 days hold no labelled feature row, however much history exists. That left 15 stations without a PM2.5 model for a week. Options: fall back to the last N labelled rows, or train without a holdout and mark the metrics missing.
+  - Gap-tolerant features were measured and are not worth it now (section 0).
 - **D. P1 item 6:** recalibrate `exceedance_probability_decision_threshold` on winter data.
   - Include the false NO2 no-go verdicts found in session 9: a single wild upper-quantile model (386 ug/m3 where the station never passed 117) pushes the interpolated probability over 0.3. Consider capping a quantile forecast at a multiple of the station's observed maximum, or requiring the classifier to agree.
 - **E. P2:**
@@ -165,6 +175,7 @@ A production-style service that tells **Delhi NCR schools whether outdoor practi
 - **Forking worker processes must not inherit a pooled DB connection** ("lost synchronization with server"): `get_engine().dispose()` before `mp.Pool` and in a worker initializer. The first forced-retrain attempt crashed on this (no models written).
 - **Don't trust a provider's unit label; check it against an independent source.** OpenAQ labels CPCB NO2 "ppb", but the values are ug/m3. The 2026-09-25 "fix" converted them and overstated NO2 by 1.88x for 5 days. CPCB's own AQI feed exposed it (ratio 0.531 = 1/1.882). Before changing units, compare against a second source.
 - **Matching two station lists by nearest coordinates alone is not enough.** OpenAQ lists some CPCB sites twice (the dead entry can be the nearer one) and misplaces others by kilometres. For 4 days Anand Vihar's current AQI sat on one entry and its forecasts on another. When a new data source is matched to stations, list every station that matched nothing and every point with two candidates, and look at them.
+- **A training rule that skips silently needs a visible count.** `train.py` skipped every combination with an empty holdout and only logged a warning; 15 stations had no PM2.5 model for a week and it looked like "no data upstream". `scripts/coverage_diagnosis.py` now names the blocking stage per station; run it whenever coverage is below expectation.
 - **A table that training reads must be refreshed over the same window as its inputs.** Ingestion re-read 72 h, features only 6 h, so late readings never became training rows. Nothing failed: the retrain just saw less data each week.
 - **Editing long `docker/.env` lines in nano can truncate them to a literal `>`** (took the site down 2026-09-30). After any edit: `grep -n '>' docker/.env | cut -d= -f1` must print nothing.
 - **The auto-mode permission check blocks some server actions** (compose rebuilds, mass UPDATEs of production rows, killing processes). The owner runs those; give them exact commands.
