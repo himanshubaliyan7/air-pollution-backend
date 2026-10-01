@@ -86,7 +86,7 @@ Read this first in a new chat. It is the complete state of the project: goal, wh
     - tapping a station opens a panel (AQI now, 5-day go/no-go, chart, subscribe); a bottom sheet on phones.
   - Backend: the **bulk endpoint is built** (`GET /api/v1/overview`, `4b6f1ec`, not yet deployed; add `?region_id=delhi-ncr` to filter). Later: a wind-field endpoint.
   - Six stations sit 1-6.5 km from their real place, because OpenAQ's coordinates are wrong (Pusa x2, Aya Nagar, North Campus, Sector-1 Noida; Rohtak differs by 46 km). The globe should not show them at the wrong spot: correct `stations.lat/lon` from the CPCB feed first (check that the weather grid cell stays the same).
-  - **Prototype built 2026-10-01** (air-clear branch `feat/globe-prototype`, commit `44a5824`): route `/globe`.
+  - **Prototype built 2026-10-01** (air-clear PR #6, OPEN, branch `feat/globe-prototype`, commit `44a5824`; not merged or deployed): route `/globe`.
     - Turning globe, fly-in to the region, stations as 3D columns (colour = category, grey hollow ring = no data), time steps "now" + 5 forecast days with play/pause, station panel with reading, verdict, days and a link to the station page.
     - **MapLibre must stay on v5**: deck.gl 9.4 throws on every frame with MapLibre 6.
     - Imagery: EOX Sentinel-2 cloudless 2020 (CC BY-NC-SA 4.0, non-commercial, credited on the map). Place names: OpenFreeMap. No borders are drawn on purpose (boundary depiction is sensitive in India).
