@@ -1,33 +1,53 @@
-# Project handoff (written 2026-09-22; rewritten 2026-09-25, end of session 5; updated 2026-09-30, end of session 8)
+# Project handoff (written 2026-09-22; rewritten 2026-09-25, end of session 5; updated 2026-09-30, end of session 8; updated 2026-10-01, session 9)
 
 Read this first in a new chat. It is the complete state of the project: goal, what exists, how it was built, what went wrong, and what to do next. Auto-memory (`MEMORY.md`) holds the same facts in shorter form. **No secrets are in this file.**
 
-## 0. START HERE: session 9 (planned 2026-10-01)
-**State at the end of session 8 (2026-09-30 ~21:00 UTC = 10-01 02:30 IST):**
-- **Phase 4 is LIVE in demo mode:** frontend https://air.himanshubaliyan.dev, API https://air-api.himanshubaliyan.dev (sslip still works too). Double opt-in works; a non-invited address gets nothing (verified). The daily digest runs 12:30 UTC (18:00 IST), and the first one arrived.
-- **NO2 unit bug fixed:** OpenAQ labels CPCB NO2 "ppb", but the values are ug/m3. Code `85ed394` is deployed. 424,408 stored rows were divided by 1.8816, and the probe went 1.882 -> 1.0. 1,312 NO2 models were retrained on the corrected data and force-activated. Details in section 5a.
-- **CPCB fallback input deployed** (`03be158`, migration 0006): `current_aqi_dag` now stores CPCB's hourly PM2.5/NO2 as readings (source `CPCB`), and OpenAQ wins any hour both hold.
-  - Backfill: 9,341 readings since 09-27. 74 stations had PM2.5 readings on 09-30; 65 had one at 19:00 UTC.
-  - **Not yet seen producing forecasts:** the 20:45 UTC forecast run ran before the deploy. The first run with the new code was due at 21:45 UTC. Coverage was 7/85 before.
-- OpenAQ's CPCB relay: stalled again since 09-29 13:00 UTC (it is intermittent, not dead). The 09-25/26 gap was backfilled where OpenAQ has the data.
+## 0. START HERE: session 10
+**State at the end of session 9 (2026-10-01 ~12:15 UTC = 17:45 IST). Four commits are pushed but NOT deployed: `037bd38`, `c4c079b`, `3c03114`, `4b6f1ec`.**
 
-**First checks tomorrow, in order:**
-1. **Did the fallback restore forecasts?** Count current verdicts: loop `/stations`, then `/forecast/{id}/exceedance?pollutant=pm25|no2`, and count `overall_recommendation` where `is_current`. Expect about 60+ PM2.5 stations (was 7). If it is still ~7:
-   - check `forecast_dag`'s latest log for skips;
-   - check that `current_aqi_dag`'s log line includes `cpcb_readings` > 0;
-   - check that `/forecast/{id}/history` shows recent hours.
-2. **NO2 forecasts** should now appear at CPCB stations, from the corrected models. Outside winter, expect mostly `go`: NO2 rarely nears 181 ug/m3.
-3. **Health:**
-   - 5 containers up; `current_aqi_dag`, `forecast_dag`, `ingestion_dag`, `watchdog_dag` succeeding;
-   - the watchdog's `forecast-coverage-low` should have sent "resolved" on Telegram (ask the owner);
-   - `sensor-data-stale` can keep firing while OpenAQ is stalled (it deliberately tracks OpenAQ only);
-   - backups: `tail -3 ~/backups/backup.log`.
-4. **Digest** at 18:00 IST: it should cover more stations now.
-5. The PM2.5 no-go share on the new coverage feeds the P1 decision below.
+**Session 9 check results (public API, 2026-10-01 11:52 UTC):**
+- **The CPCB fallback works.** PM2.5 verdicts at **52 stations** (48 no-go, 4 go), up from 7. NO2 at **43** (41 go, 2 no-go), up from 0. Most forecasts were made from an hour less than 3 h old. API `/health` ok; 67 stations have current AQI.
+- **Below the 60+ target. Causes of the 33 PM2.5 no-data stations:**
+  - **15: live CPCB PM2.5 but no PM2.5 model** (e.g. Mandir Marg, Punjabi Bagh, Patparganj, Lodhi Road, Najafgarh). Most of them do have NO2 forecasts. Cause not yet known: it needs the database (`scripts/coverage_diagnosis.py`, step 4 below).
+  - **9 entries (7 CPCB stations): the CPCB feed was matched to the wrong station or to none.** FIXED in `037bd38`, not deployed.
+    - Anand Vihar and ITO have two OpenAQ entries each on one point. CPCB data went to the dead duplicate (`openaq:5509`, `openaq:10489`), which has no models; the live entries (`openaq:235`, `openaq:5613`) got nothing.
+    - Pusa DPCC, Pusa IMD, Aya Nagar, North Campus and Sector-1 Noida matched nothing: OpenAQ places them 1.2-6.5 km from CPCB's coordinates.
+  - **4: model exists, PM2.5 data is fresh, still no forecast** (Ashok Vihar, Alipur, Sector 11 Faridabad, Manesar). Likely gaps in the lag hours: one missing hour among lags 1/3/6/12/24/48 blocks the forecast. See plan item C.
+  - 1: Indirapuram has a model for the 24 h horizon only.
+  - 4: no CPCB station and no fresh OpenAQ data (MD University Rohtak, New Industrial Town Faridabad, "New Delhi", Ved Vihar-Loni).
+- **The two NO2 no-go verdicts are false** (Sanjay Nagar Ghaziabad, NSIT Dwarka). One horizon's upper-quantile model predicts 386 / 292 ug/m3 where the 90-day observed maximum is 117 / 178 and nothing ever exceeded 181. Probability 0.37 / 0.31, just over the 0.3 threshold. Not fixed: it belongs to plan item D.
+- **Not checked (auto mode blocks ssh reads of production):** containers, DAG runs, backups, the watchdog's "resolved" message, the 18:00 IST digest. The owner should check these (step 5 below).
+
+**Built in session 9:**
+- `037bd38` **Station matching** (`ingestion/loaders/aqi_snapshot_loader.py::match_station`): among several stations within 250 m the one with the newest OpenAQ reading wins; with none within 250 m, the same site name and operator within 10 km matches (IITM = IMD). Checked against the live feed: 66 matches unchanged, 7 changed, no two feed stations on one of ours.
+- `c4c079b` **Feature refresh window 6 h -> 72 h.** The hourly feature run rewrote only the last 6 hours, but readings arrive later than that. Those hours stayed all-NaN in `features`, and training reads only that table, so they dropped out of every retrain since the last manual rebuild.
+- `3c03114` **Owner-run scripts:** `merge_duplicate_station.py`, `rebuild_features.py`, `coverage_diagnosis.py` (read-only).
+- `4b6f1ec` **`GET /api/v1/overview`**: every active station's current AQI and both outlooks in one response (4 queries; `Cache-Control: public, max-age=120`). The per-station endpoints' own code produces each part. This is the backend half of plan item F.
+- Tests: 195 pass (the one known failure is still deselected).
+
+**Deploy steps (owner-run on the server; use a :50-:58 or :20-:28 UTC window; no migration):**
+1. Deploy the code:
+   `cd ~/air-pollution-backend && git pull && cd docker && sudo docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --force-recreate --build api airflow-scheduler airflow-webserver`
+2. Move the stored CPCB data off the two duplicates. Each command first without `--apply` (report only), then with it:
+   `cd ~/air-pollution-backend`
+   `sudo docker exec -i docker-airflow-scheduler-1 python - --dead openaq:5509 --live openaq:235 --apply < scripts/merge_duplicate_station.py`
+   `sudo docker exec -i docker-airflow-scheduler-1 python - --dead openaq:10489 --live openaq:5613 --apply < scripts/merge_duplicate_station.py`
+   The script refuses if the pair is more than 250 m apart or if `--live` lacks the newer OpenAQ history.
+3. Rebuild the features the 6 h window missed (a few minutes):
+   `sudo docker exec -i docker-airflow-scheduler-1 python - --days 14 < scripts/rebuild_features.py`
+4. Run the diagnosis and paste the output into the next chat:
+   `sudo docker exec -i docker-airflow-scheduler-1 python - < scripts/coverage_diagnosis.py`
+5. Health: `sudo docker ps`, `tail -3 ~/backups/backup.log`, and whether Telegram showed `forecast-coverage-low` "resolved".
+
+**First checks in session 10:**
+1. `curl -s https://air-api.himanshubaliyan.dev/api/v1/overview` works, and Anand Vihar (`openaq:235`) and ITO (`openaq:5613`) have a PM2.5 verdict. Expect about 54 PM2.5 stations at once. The five name-matched stations need about 48 h of CPCB readings before their lags are complete, then about 58.
+2. Read the diagnosis output for the 15 stations without a PM2.5 model. If the cause is "no complete features", step 3 above plus a retrain fixes it. If it is "nothing in holdout" (too little history), they need a pooled or shorter-holdout model: decide then.
+3. The weekly retrain runs Sunday 2026-10-04 00:00 UTC. It is the first one to see the rebuilt features: check how many models it promotes.
+4. All API paths start with `/api/v1` (`/health` alone returns 404).
 
 **Plan (Phase 6 "winter readiness", target ~2026-10-18; details in section 5a):**
 - **A. Close P0.**
-  - Confirm the coverage (check 1).
+  - Coverage is 52 PM2.5 stations (session 9). Deploy the matching fix and resolve the 15 stations without a PM2.5 model to pass 60.
   - When OpenAQ's relay delivers post-fix NO2, rerun `scripts/cpcb_subindex_study.py`: NO2 should now show ratio ~1.0 (final proof of the unit fix).
   - Watch that CPCB-filled hours don't distort the evaluation (`/model-health`).
 - **B. Owner decision (P1 item 4):** what "no-go" means.
@@ -35,7 +55,9 @@ Read this first in a new chat. It is the complete state of the project: goal, wh
   - (b) the 24 h mean >= 91 (CPCB "Poor");
   - (c) **graded verdicts Poor / Very Poor / Severe (recommended)**, so winter days stay distinguishable.
 - **C. Build P1 item 5:** per-day targets (daily mean and/or daily max on the IST day, 5 horizons) instead of "one forecast hour per day". Backtest with `scripts/winter_eval.py` before promoting.
+  - Do it together with **gap-tolerant features**: today one missing hour among lags 1/3/6/12/24/48 blocks a station's forecast (4 stations on 2026-10-01). Filling short gaps changes the features, so it needs the same retrain and backtest.
 - **D. P1 item 6:** recalibrate `exceedance_probability_decision_threshold` on winter data.
+  - Include the false NO2 no-go verdicts found in session 9: a single wild upper-quantile model (386 ug/m3 where the station never passed 117) pushes the interpolated probability over 0.3. Consider capping a quantile forecast at a multiple of the station's observed maximum, or requiring the classifier to agree.
 - **E. P2:**
   - ~Oct 3: go-live step 9 (drop sslip from `CADDY_SITE_ADDRESS` and workers.dev from CORS);
   - Telegram alert when a digest run fails or sends 0 emails;
@@ -52,11 +74,15 @@ Read this first in a new chat. It is the complete state of the project: goal, wh
     - a time slider now -> +5 days that animates the forecast;
     - wind streaks from our weather data;
     - tapping a station opens a panel (AQI now, 5-day go/no-go, chart, subscribe); a bottom sheet on phones.
-  - Backend needs: a **bulk endpoint** (all stations' current AQI + outlook in one call, instead of ~170 requests); later a wind-field endpoint.
+  - Backend: the **bulk endpoint is built** (`GET /api/v1/overview`, `4b6f1ec`, not yet deployed; add `?region_id=delhi-ncr` to filter). Later: a wind-field endpoint.
+  - Six stations sit 1-6.5 km from their real place, because OpenAQ's coordinates are wrong (Pusa x2, Aya Nagar, North Campus, Sector-1 Noida; Rohtak differs by 46 km). The globe should not show them at the wrong spot: correct `stations.lat/lon` from the CPCB feed first (check that the weather grid cell stays the same).
+  - Next step: the clickable prototype in the air-clear repo.
   - Frontend: the air-clear repo (TanStack Start; there is no map library today), deployed to Cloudflare Workers. Claude builds it, since Lovable's credits are gone.
   - Imagery licence must suit a non-commercial portfolio; check it before choosing a tile source.
 
 ## 0a. Earlier session results (kept for history)
+**Session 8 end state (2026-09-30 ~21:00 UTC):** Phase 4 live in demo mode (frontend https://air.himanshubaliyan.dev, API https://air-api.himanshubaliyan.dev; digest daily 12:30 UTC = 18:00 IST). NO2 unit bug fixed (data, code, models; section 5a). CPCB fallback input deployed (`03be158`, migration 0006; backfill of 9,341 readings since 09-27). OpenAQ's CPCB relay stalled again from 09-29 13:00 UTC.
+
 **Session 7 results (2026-09-27 ~17:45 UTC):**
 - Healthy: server (5 containers up, `/health` ok, disk 41%); backups daily through 09-27; `ingestion`, `feature_engineering`, `forecast`, `watchdog` and `station_maintenance` DAGs all succeeded; `evaluation_monitoring_dag` passed every night since the fix.
 - Weekly retrain (09-27 00:00 UTC) succeeded: it promoted 1,900 of 2,052 new models. No old/new model mix.
@@ -83,7 +109,7 @@ A production-style service that tells **Delhi NCR schools whether outdoor practi
 - **LIVE deployment: Oracle Cloud (Always Free), not the owner's PC.** `https://137-23-49-72.sslip.io`. Instance `air-pollution-backend`, `ap-mumbai-1`, `VM.Standard.A1.Flex` (ARM, 4 OCPU/24GB), reserved public IP `137.23.49.72`, Ubuntu 24.04 Minimal aarch64. SSH: `ssh air-pollution-backend` (alias in `~/.ssh/config` on the owner's machine, also usable from any Claude session with that config present) or `ssh ubuntu@137.23.49.72` — the owner's own key (`~/.ssh/id_ed25519`) is authorized directly on the server, independent of any Claude session. Stack: `postgres` (TimescaleDB), `airflow-scheduler`/`airflow-webserver`, `api`, `caddy` (TLS + reverse proxy, HTTP/1.1+2 only — HTTP/3 deliberately disabled). All containers `restart: unless-stopped`/`on-failure` and **reboot-tested** to come back on their own.
 - **DAGs: 8 running on schedule** (UTC): `ingestion_dag` :10, `feature_engineering_dag` :30, `current_aqi_dag` :40, `forecast_dag` :45, `watchdog_dag` :55 (Telegram + healthchecks.io, both live), `evaluation_monitoring_dag` daily 00:00, `retraining_dag` weekly (Sun 00:00), `station_maintenance_dag` daily 02:30 (station activity + subscriber-data retention purge). **`alert_digest_dag` (daily 12:30 UTC = 18:00 IST) is deployed but PAUSED** until the Phase 4 go-live.
 - **Data (2026-09-25, session 6)**: 85 active stations, ~70 with a current CPCB reading, **73 with a current forecast** (was 6). History now starts **2025-10-01** (last winter backfilled from the OpenAQ S3 archive), ERA5 weather from 2025-09-25. **NO2 is stored in ug/m3** (was ppb until 2026-09-25). **All live models retrained 2026-09-25 on the last 365 days (winter included)** and force-promoted; PM2.5 models for 66 stations, NO2 for 55.
-- **API contract**: `docs/openapi.json` (regenerate with `.venv/Scripts/python -m scripts.export_openapi`). `/regions`, `/stations`, `/stations/{id}/current-aqi`, `/forecast/{id}` (+`timezone`), `/forecast/{id}/exceedance`, `/forecast/{id}/history` (+`timezone`), `/attributions`, `/model-health`, `/health`, and **`/subscriptions`** (double opt-in: `POST /subscriptions`, `/confirm`, `/manage`, `/unsubscribe`, `/unsubscribe/one-click`, `/delete`; live since 2026-09-25 but dormant: no SMTP configured, no sign-up UI deployed). `CORS_ALLOWED_ORIGINS` currently allows **only** `https://himanshubaliyan7-air-clear.himanshubaliyan.workers.dev`.
+- **API contract**: `docs/openapi.json` (regenerate with `.venv/Scripts/python -m scripts.export_openapi`). `/regions`, `/stations`, `/stations/{id}/current-aqi`, `/forecast/{id}` (+`timezone`), `/forecast/{id}/exceedance`, `/forecast/{id}/history` (+`timezone`), `/attributions`, `/model-health`, `/health`, `/overview` (all stations in one response, since session 9), and **`/subscriptions`** (double opt-in: `POST /subscriptions`, `/confirm`, `/manage`, `/unsubscribe`, `/unsubscribe/one-click`, `/delete`; live since 2026-09-25 but dormant: no SMTP configured, no sign-up UI deployed). `CORS_ALLOWED_ORIGINS` currently allows **only** `https://himanshubaliyan7-air-clear.himanshubaliyan.workers.dev`.
 - **Frontend repo**: `https://github.com/himanshubaliyan7/air-clear` (TanStack Start/Query, TS). **Phases 0-3 and 5 built, reviewed, live.** **Phase 4 (daily-email pages) built and tested, in PR #4, OPEN**; merge and deploy only at go-live (section 6 item 3). Two deployments exist:
   - **Cloudflare Workers — the live one**: `https://himanshubaliyan7-air-clear.himanshubaliyan.workers.dev`. Redeploy after any frontend change with `CLOUDFLARE_API_TOKEN=... VITE_API_BASE_URL=https://137-23-49-72.sslip.io ./scripts/deploy-cloudflare.sh` (script is in the repo; needs a fresh Cloudflare API token each time — see section 6).
   - **Lovable — dormant, not deleted**: `https://air-wise-globe.lovable.app`. Still published but CORS-blocked (owner's Lovable credits are exhausted; project kept intact for other future work). Add its origin back to `CORS_ALLOWED_ORIGINS` if it's ever used again.
@@ -111,6 +137,7 @@ A production-style service that tells **Delhi NCR schools whether outdoor practi
    - proved CPCB's hourly sub-index = the hourly concentration;
    - found and fixed the NO2 unit bug (data, code, models);
    - built and deployed the CPCB fallback input.
+8. **Session 9** (2026-10-01): ran the checks (PM2.5 coverage 7 -> 52); fixed the CPCB station matching and the 6 h feature refresh window; added the repair and diagnosis scripts; built `GET /overview`. Nothing deployed yet (section 0).
 
 ## 4. Key design decisions and why
 - Forecast models use hourly ug/m3 history only. The CPCB feed is **AQI sub-indices**. Until 2026-10-01 it powered current conditions only.
@@ -137,6 +164,8 @@ A production-style service that tells **Delhi NCR schools whether outdoor practi
 - **Session 6 bugs (2026-09-25), all fixed and tested - don't reintroduce:** NO2 stored in ppb but compared with ug/m3 thresholds (`6693c29`); current-conditions freshness shared the forecast staleness constant, so raising it would have served day-old CPCB readings as "now" (`2adf3cf`); None-F1 crashed `promote_if_better` (weekly retrain) (`bfc53b1`); after a retrain, forecast rows from old and new models coexisted at an unchanged anchor and the outlook took the worst of both (`7268c4e`); the S3 archive stamps periods at their END and some stations publish 15-minute data (`12dd226`, verified value-for-value against API rows).
 - **Forking worker processes must not inherit a pooled DB connection** ("lost synchronization with server"): `get_engine().dispose()` before `mp.Pool` and in a worker initializer. The first forced-retrain attempt crashed on this (no models written).
 - **Don't trust a provider's unit label; check it against an independent source.** OpenAQ labels CPCB NO2 "ppb", but the values are ug/m3. The 2026-09-25 "fix" converted them and overstated NO2 by 1.88x for 5 days. CPCB's own AQI feed exposed it (ratio 0.531 = 1/1.882). Before changing units, compare against a second source.
+- **Matching two station lists by nearest coordinates alone is not enough.** OpenAQ lists some CPCB sites twice (the dead entry can be the nearer one) and misplaces others by kilometres. For 4 days Anand Vihar's current AQI sat on one entry and its forecasts on another. When a new data source is matched to stations, list every station that matched nothing and every point with two candidates, and look at them.
+- **A table that training reads must be refreshed over the same window as its inputs.** Ingestion re-read 72 h, features only 6 h, so late readings never became training rows. Nothing failed: the retrain just saw less data each week.
 - **Editing long `docker/.env` lines in nano can truncate them to a literal `>`** (took the site down 2026-09-30). After any edit: `grep -n '>' docker/.env | cut -d= -f1` must print nothing.
 - **The auto-mode permission check blocks some server actions** (compose rebuilds, mass UPDATEs of production rows, killing processes). The owner runs those; give them exact commands.
 - A phase report's own "type check is clean" claim was wrong once (Lovable Phase 5) — always actually run `tsc --noEmit` and the test suite myself before approving, never trust the report alone.
@@ -257,9 +286,11 @@ Delhi's pollution season starts mid-October (stubble burning) and peaks in Novem
 - **Deploying a backend code change**: commit and push locally. Then on the server: `git pull && cd docker && sudo docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --force-recreate --build <services>`. Python code is baked into the images, so rebuild every service whose code changed: usually `api airflow-scheduler airflow-webserver`. **Add `db-migrate` whenever a new Alembic migration ships**: it has its own image, and running the old image skips the migration. Avoid :10-:17 (ingestion), :30, :40 and :45 past the hour, so running tasks aren't killed. `dashboard` and `mailhog` are deliberately left out of production.
 - **Running one-off Python on the server**: `scripts/` is not in the images. Pipe a file in with `sudo docker exec -i docker-airflow-scheduler-1 python - < /tmp/x.py`. `/app` is importable, and args go after `python -`. For long jobs, wrap in `nohup sh -c "..." > ~/log 2>&1 &`. A `docker exec -i` inside a `bash -s` heredoc swallows the rest of the script's stdin: give it `< /dev/null` or its own input.
 - **Local testing**: start Docker Desktop, then `docker compose up -d postgres` in `docker/` (test DB on localhost:5433, password in `docker/.env`). Afterwards, `docker compose down` (no `-v`) and quit Docker Desktop. For email tests, `docker compose up -d mailhog` (UI http://127.0.0.1:8025). Never use a bare `git stash` in this repo, because worktrees share the stash: use a WIP commit or a named stash applied by SHA.
+- **After any backfill, merge or data repair**, run `scripts/rebuild_features.py --days N` for the affected window: the hourly run only rewrites the last 72 h.
+- **Coverage check from any machine** (no ssh): `GET /api/v1/overview` and count `outlooks[].overall_recommendation`. `scripts/coverage_diagnosis.py` (on the server, read-only) names the stage that blocks each station.
 - **Times**: the server and Airflow run on UTC; the owner is on IST (UTC+5:30). Give both when telling the owner when to act.
 - **Deploying a frontend change**: in the `air-clear` repo, `CLOUDFLARE_API_TOKEN=... VITE_API_BASE_URL=https://137-23-49-72.sslip.io ./scripts/deploy-cloudflare.sh`.
 - **Test DB**: `TEST_DATABASE_URL=postgresql+psycopg2://postgres:<pw>@localhost:5433/airpollution_test` (local) or the server's own Postgres on `localhost:5433` there; create with `python -m scripts.setup_test_db`; run `pytest tests`. Never point tests at the real `airpollution` DB (integration tests TRUNCATE tables).
 - **Backups**: automatic, daily 03:00 UTC on the server (`scripts/backup_db.sh` via cron), local 14-day rotation + Oracle Object Storage off-instance copy. Restore with `scripts/restore_db.sh /path/to/dump.file` (destructive, asks for confirmation).
 - Git Bash mangles `docker exec -w /app` into a Windows path on the owner's machine: use PowerShell for that specific case.
-- Commit messages end `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>`; commit before starting each new fix, not just at the end of a session.
+- Commit messages end with the `Co-Authored-By: Claude ...` line of the model in use; commit before starting each new fix, not just at the end of a session.

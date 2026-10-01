@@ -3,7 +3,7 @@
 One line per active station and pollutant with the facts each stage needs:
 readings per source, feature rows (and how many are complete enough to train
 on), active models per horizon, and the newest forecast. Written for the
-2026-10-01 question "17 stations have live CPCB PM2.5 but no PM2.5 model".
+2026-10-01 question "15 stations have live CPCB PM2.5 but no PM2.5 model".
 
 Run inside the Airflow scheduler container (scripts/ is not in the image):
     sudo docker exec -i docker-airflow-scheduler-1 python - < scripts/coverage_diagnosis.py
