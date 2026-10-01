@@ -8,13 +8,13 @@ from api.db import get_db
 from api.schemas.current_aqi import CurrentAqiOut, OverallAqiOut, PollutantAqiOut
 from common.aqi import ATTRIBUTION, at_or_above_health_threshold, category_for_sub_index, overall_aqi
 from common.freshness import is_reading_current
-from common.regions import region_for_point
+from common.regions import Region, region_for_point
 from db.models import Station, StationAqiSnapshot
 
 router = APIRouter(prefix="/stations", tags=["current-aqi"])
 
 # Pollutants of one station are published together, but tolerate one lagging a little.
-_SAME_SNAPSHOT_WINDOW = timedelta(hours=3)
+SAME_SNAPSHOT_WINDOW = timedelta(hours=3)
 
 
 @router.get("/{station_id}/current-aqi", response_model=CurrentAqiOut)
@@ -33,24 +33,31 @@ def get_current_aqi(station_id: str, db: Session = Depends(get_db)):
         attribution=ATTRIBUTION,
     )
 
+    now = datetime.now(timezone.utc)
     newest = db.execute(
         select(func.max(StationAqiSnapshot.source_updated_at)).where(StationAqiSnapshot.station_id == station_id)
     ).scalar_one_or_none()
-    if newest is None:
-        return CurrentAqiOut(as_of=None, is_current=False, overall=None, pollutants=[], **base)
-    if not is_reading_current(newest, datetime.now(timezone.utc)):
-        # Same rule as forecasts: an old reading is reported as "no current data", never served as current.
-        return CurrentAqiOut(as_of=newest, is_current=False, overall=None, pollutants=[], **base)
+    rows = []
+    if is_reading_current(newest, now):
+        rows = db.execute(
+            select(StationAqiSnapshot).where(
+                StationAqiSnapshot.station_id == station_id,
+                StationAqiSnapshot.source_updated_at >= newest - SAME_SNAPSHOT_WINDOW,
+            )
+        ).scalars().all()
+    return CurrentAqiOut(**current_conditions(region, newest, rows, now), **base)
 
-    rows = db.execute(
-        select(StationAqiSnapshot)
-        .where(
-            StationAqiSnapshot.station_id == station_id,
-            StationAqiSnapshot.source_updated_at >= newest - _SAME_SNAPSHOT_WINDOW,
-        )
-        .order_by(StationAqiSnapshot.source_updated_at)
-    ).scalars().all()
-    latest_by_pollutant = {r.pollutant_id: r for r in rows}  # ascending order: the last write per pollutant wins
+
+def current_conditions(region: Region | None, newest: datetime | None, rows: list[StationAqiSnapshot], now: datetime) -> dict:
+    """The current-conditions fields of one station, from its newest reading time
+    (None if it never had one) and its snapshot rows within SAME_SNAPSHOT_WINDOW
+    of it. Shared with the overview endpoint, so the two cannot disagree."""
+    if not is_reading_current(newest, now):
+        # Same rule as forecasts: an old reading is reported as "no current data", never served as current.
+        return dict(as_of=newest, is_current=False, overall=None, at_or_above_health_threshold=None, pollutants=[])
+
+    # Ascending order: the last write per pollutant wins.
+    latest_by_pollutant = {r.pollutant_id: r for r in sorted(rows, key=lambda r: r.source_updated_at)}
 
     thresholds = region.thresholds() if region else None
     pollutants = [
@@ -73,7 +80,6 @@ def get_current_aqi(station_id: str, db: Session = Depends(get_db)):
             overall = OverallAqiOut(aqi=aqi, category=category_for_sub_index(thresholds, aqi), driver=driver)
             over_threshold = at_or_above_health_threshold(thresholds, overall.category)
 
-    return CurrentAqiOut(
-        as_of=newest, is_current=True, overall=overall, at_or_above_health_threshold=over_threshold,
-        pollutants=pollutants, **base
+    return dict(
+        as_of=newest, is_current=True, overall=overall, at_or_above_health_threshold=over_threshold, pollutants=pollutants
     )

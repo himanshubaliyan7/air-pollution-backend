@@ -9,14 +9,14 @@ calendar day; rows are only bucketed to the station-local calendar day.
 """
 
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from common.constants import DEFAULT_HORIZONS_HOURS, Pollutant
-from common.freshness import is_input_fresh
+from common.constants import DEFAULT_HORIZONS_HOURS, MAX_INPUT_STALENESS_HOURS, Pollutant
+from common.freshness import floor_hour, is_input_fresh
 from common.regions import region_for_point
 from db.models import Forecast, Station
 from models.exceedance import get_aqi_category, load_thresholds
@@ -82,24 +82,71 @@ def is_forecast_current(made_at: datetime | None, now: datetime | None = None) -
 def build_outlook(
     session: Session, station: Station, pollutant: Pollutant, days_ahead: int = 5, now: datetime | None = None
 ) -> Outlook:
-    tz_name = station_timezone(station)
     made_at = latest_forecast_made_at(session, station.station_id, pollutant)
+    rows = []
+    if is_forecast_current(made_at, now):
+        rows = session.execute(
+            select(Forecast)
+            .where(
+                Forecast.station_id == station.station_id,
+                Forecast.pollutant == pollutant,
+                Forecast.forecast_made_at == made_at,
+                Forecast.horizon_hours <= days_ahead * 24,
+            )
+            .order_by(Forecast.target_time)
+        ).scalars().all()
+    return outlook_from_rows(station, pollutant, made_at, rows, days_ahead, now)
+
+
+def build_outlooks(
+    session: Session, stations: list[Station], days_ahead: int = 5, now: datetime | None = None
+) -> dict[tuple[str, Pollutant], Outlook]:
+    """build_outlook for every station and pollutant in two queries (the
+    overview endpoint: one request instead of two per station). Only current
+    runs are looked up, so a pair without one is no-data with forecast_made_at
+    None, where build_outlook would report how old its last run is."""
+    now = now or datetime.now(timezone.utc)
+    oldest_current = floor_hour(now) - timedelta(hours=MAX_INPUT_STALENESS_HOURS)
+    recent = (
+        Forecast.forecast_made_at >= oldest_current,
+        Forecast.target_time >= oldest_current,  # the hypertable's partition column: scan recent chunks only
+    )
+    made_at = {
+        (sid, pol): ts
+        for sid, pol, ts in session.execute(
+            select(Forecast.station_id, Forecast.pollutant, func.max(Forecast.forecast_made_at))
+            .where(*recent)
+            .group_by(Forecast.station_id, Forecast.pollutant)
+        )
+    }
+    rows: dict[tuple[str, Pollutant], list[Forecast]] = {}
+    for r in session.execute(
+        select(Forecast).where(*recent, Forecast.horizon_hours <= days_ahead * 24).order_by(Forecast.target_time)
+    ).scalars():
+        key = (r.station_id, r.pollutant)
+        if r.forecast_made_at == made_at.get(key):
+            rows.setdefault(key, []).append(r)
+    return {
+        (s.station_id, pol): outlook_from_rows(
+            s, pol, made_at.get((s.station_id, pol)), rows.get((s.station_id, pol), []), days_ahead, now
+        )
+        for s in stations
+        for pol in Pollutant
+    }
+
+
+def outlook_from_rows(
+    station: Station, pollutant: Pollutant, made_at: datetime | None, rows: list[Forecast], days_ahead: int = 5,
+    now: datetime | None = None,
+) -> Outlook:
+    """The decision itself, from the newest run's rows (`made_at` is that run's
+    anchor hour; `rows` its forecasts up to `days_ahead`)."""
+    tz_name = station_timezone(station)
     # No forecast, or one anchored on input older than generate_forecasts is
     # willing to use, must never read as "go" - a school would treat silence
     # as clearance.
     if not is_forecast_current(made_at, now):
         return Outlook(station.station_id, pollutant.value, tz_name, made_at, False, [], "no-data")
-
-    rows = session.execute(
-        select(Forecast)
-        .where(
-            Forecast.station_id == station.station_id,
-            Forecast.pollutant == pollutant,
-            Forecast.forecast_made_at == made_at,
-            Forecast.horizon_hours <= days_ahead * 24,
-        )
-        .order_by(Forecast.target_time)
-    ).scalars().all()
 
     thresholds = load_thresholds()
     by_day: dict = {}

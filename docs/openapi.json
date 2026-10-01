@@ -501,6 +501,67 @@
         }
       }
     },
+    "/api/v1/overview": {
+      "get": {
+        "tags": [
+          "overview"
+        ],
+        "summary": "Get Overview",
+        "operationId": "get_overview_api_v1_overview_get",
+        "parameters": [
+          {
+            "name": "region_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Region Id"
+            }
+          },
+          {
+            "name": "days_ahead",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 14,
+              "minimum": 1,
+              "default": 5,
+              "title": "Days Ahead"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverviewOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/subscriptions/availability": {
       "get": {
         "tags": [
@@ -1370,6 +1431,147 @@
           "driver"
         ],
         "title": "OverallAqiOut"
+      },
+      "OverviewCurrentAqiOut": {
+        "properties": {
+          "as_of": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of"
+          },
+          "is_current": {
+            "type": "boolean",
+            "title": "Is Current"
+          },
+          "overall": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OverallAqiOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "at_or_above_health_threshold": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At Or Above Health Threshold"
+          },
+          "pollutants": {
+            "items": {
+              "$ref": "#/components/schemas/PollutantAqiOut"
+            },
+            "type": "array",
+            "title": "Pollutants"
+          }
+        },
+        "type": "object",
+        "required": [
+          "as_of",
+          "is_current",
+          "overall",
+          "pollutants"
+        ],
+        "title": "OverviewCurrentAqiOut",
+        "description": "GET /stations/{id}/current-aqi without the per-station constants (see OverviewOut)."
+      },
+      "OverviewOut": {
+        "properties": {
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          },
+          "attribution": {
+            "type": "string",
+            "title": "Attribution"
+          },
+          "stations": {
+            "items": {
+              "$ref": "#/components/schemas/OverviewStationOut"
+            },
+            "type": "array",
+            "title": "Stations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "generated_at",
+          "attribution",
+          "stations"
+        ],
+        "title": "OverviewOut",
+        "description": "Everything a map needs for every active station, in one response."
+      },
+      "OverviewStationOut": {
+        "properties": {
+          "station_id": {
+            "type": "string",
+            "title": "Station Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "lat": {
+            "type": "number",
+            "title": "Lat"
+          },
+          "lon": {
+            "type": "number",
+            "title": "Lon"
+          },
+          "city": {
+            "type": "string",
+            "title": "City"
+          },
+          "region_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region Id"
+          },
+          "current_aqi": {
+            "$ref": "#/components/schemas/OverviewCurrentAqiOut"
+          },
+          "outlooks": {
+            "items": {
+              "$ref": "#/components/schemas/ExceedanceSummaryOut"
+            },
+            "type": "array",
+            "title": "Outlooks"
+          }
+        },
+        "type": "object",
+        "required": [
+          "station_id",
+          "name",
+          "lat",
+          "lon",
+          "city",
+          "current_aqi",
+          "outlooks"
+        ],
+        "title": "OverviewStationOut"
       },
       "Pollutant": {
         "type": "string",

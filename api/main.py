@@ -4,7 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from api.db import get_db
-from api.routers import attributions, current_aqi, exceedance, forecasts, regions, stations, subscriptions
+from api.routers import attributions, current_aqi, exceedance, forecasts, overview, regions, stations, subscriptions
 from common.config import get_settings
 from common.logging_conf import configure_logging
 
@@ -26,6 +26,7 @@ app.include_router(current_aqi.router, prefix="/api/v1")
 app.include_router(stations.router, prefix="/api/v1")
 app.include_router(forecasts.router, prefix="/api/v1")
 app.include_router(exceedance.router, prefix="/api/v1")
+app.include_router(overview.router, prefix="/api/v1")
 app.include_router(subscriptions.router, prefix="/api/v1")
 
 

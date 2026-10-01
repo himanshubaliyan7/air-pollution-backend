@@ -10,7 +10,7 @@ from api.db import get_db
 from api.schemas.forecasts import ExceedanceDayOut, ExceedanceSummaryOut
 from common.constants import Pollutant
 from db.models import Station
-from models.outlook import build_outlook
+from models.outlook import Outlook, build_outlook
 
 router = APIRouter(tags=["exceedance"])
 
@@ -25,7 +25,10 @@ def get_exceedance_summary(
     station = db.get(Station, station_id)
     if station is None:
         raise HTTPException(status_code=404, detail="station not found")
-    outlook = build_outlook(db, station, pollutant, days_ahead)
+    return summary_out(build_outlook(db, station, pollutant, days_ahead))
+
+
+def summary_out(outlook: Outlook) -> ExceedanceSummaryOut:
     return ExceedanceSummaryOut(
         station_id=outlook.station_id,
         pollutant=outlook.pollutant,
