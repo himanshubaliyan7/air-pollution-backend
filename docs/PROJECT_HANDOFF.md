@@ -1,10 +1,86 @@
-# Project handoff (written 2026-09-22; rewritten 2026-09-25, end of session 5; updated 2026-09-30, end of session 8; updated 2026-10-01, session 9)
+# Project handoff (written 2026-09-22; rewritten 2026-09-25, end of session 5; updated 2026-09-30, end of session 8; updated 2026-10-01, end of session 9)
 
 Read this first in a new chat. It is the complete state of the project: goal, what exists, how it was built, what went wrong, and what to do next. Auto-memory (`MEMORY.md`) holds the same facts in shorter form. **No secrets are in this file.**
 
 ## 0. START HERE: session 10
-**State at the end of session 9 (2026-10-01 ~13:10 UTC = 18:40 IST). `037bd38`, `c4c079b`, `3c03114`, `4b6f1ec` are DEPLOYED (owner, ~12:45 UTC). `6f0e793` adds `scripts/train_missing_models.py`: scripts only, a `git pull` on the server is enough.**
+**State at the end of session 9 (2026-10-01 17:20 UTC = 22:50 IST).** Session 9 was long: checks, coverage fixes, a globe that was built and then dropped, and a new dashboard. The details are in section 0a ("Session 9 details").
 
+**What is live:**
+- **Backend:** code up to `4b6f1ec` is deployed (station matching, 72 h feature window, `GET /api/v1/overview`). The server repo is pulled to at least `6f0e793`, because the owner ran `train_missing_models.py` from it.
+- **Not deployed:** `bee3c03` (matcher prefers the feed station's own operator, `scripts/fix_station_coordinates.py`, `seed_stations.py` keeps coordinates). It needs an image rebuild: owner step 1 below.
+- **Forecast coverage (public API, 17:19 UTC):** PM2.5 verdicts at **68 stations** (64 no-go, 4 go; 66 with all 5 days), was 7 at the start of the day. NO2 at **58** (55 go, 2 caution, 1 no-go), was 0. 72 stations have current AQI.
+- **Frontend:** air-clear `main` = `a26c652` (PR #7 merged), deployed by the owner. https://air.himanshubaliyan.dev shows the station dashboard with an optional Leaflet map; `/globe` is gone. Verified in Chrome on the live site: dashboard, map with 83 dots, selecting a dot, home page returning to the last station, 7 API calls all 200.
+- **Server health (owner, ~13:30 UTC):** 5 containers up; the 03:00 UTC backup completed (146 MB) with the off-site copy.
+- Tests: backend 198 pass (the one known failure is still deselected); frontend 72 pass.
+
+**Owner steps still to run:**
+1. **Station coordinates** (server; use a :50-:58 or :20-:28 UTC window; no migration). Deploy first: the script needs the new matcher from the image.
+   `cd ~/air-pollution-backend && git pull && cd docker && sudo docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --force-recreate --build api airflow-scheduler airflow-webserver && cd ..`
+   `sudo docker exec -i docker-airflow-scheduler-1 python - < scripts/fix_station_coordinates.py` (report)
+   `sudo docker exec -i docker-airflow-scheduler-1 python - --apply --allow-grid-change < scripts/fix_station_coordinates.py`
+   `sudo docker exec -i docker-airflow-scheduler-1 python - --days 372 --station openaq:5570 < scripts/rebuild_features.py`
+   - Expected report: Pusa DPCC, Pusa IMD, North Campus and Sector-1 Noida keep their weather cell; **Aya Nagar moves from cell 28.50_77.25 to 28.50_77.00**, which is why it needs `--allow-grid-change` and the feature rebuild. Its models were trained on the old cell's weather until the Sunday retrain; it cannot forecast before about 2026-10-03 14:00 UTC anyway.
+   - MD University Rohtak is left alone: CPCB's coordinates for it are 46 km away and look wrong, ours look right.
+2. **Revoke the Cloudflare API token that was pasted into the session-9 chat** (dashboard -> My Profile -> API Tokens -> Roll or Delete). Not confirmed done. Later deploys need a fresh token anyway.
+3. Did Telegram show `forecast-coverage-low` "resolved"? Did the 18:00 IST digest arrive with more stations?
+4. **Decision B:** what "no-go" means (recommended: graded Poor / Very Poor / Severe).
+5. Try the dashboard on a real phone, including tapping a dot on the map. Only a 390 px frame on desktop was checked.
+
+**First checks in session 10:**
+1. Coverage: `curl -s https://air-api.himanshubaliyan.dev/api/v1/overview` and count `outlooks[].overall_recommendation`. Compare with 68 / 58 above.
+   - From about 2026-10-03 14:00 UTC the five name-matched stations (Pusa x2, Aya Nagar, North Campus, Sector-1 Noida) should get forecasts. North Campus has no PM2.5 model.
+   - Alipur, Manesar, Ashok Vihar and Sector 11 Faridabad should have recovered by themselves (they needed 48 h of unbroken CPCB data).
+2. Ask the owner which of the steps above were run.
+3. **Check the models trained by `train_missing_models.py` before trusting them.** Their holdout is tiny (tens of rows), so their stored metrics mean little. PM2.5 is no-go at 64 of 68 stations, the same share as before the new models; compare the new stations with their neighbours.
+4. One NO2 no-go and two NO2 cautions remain. The two no-go verdicts seen at 11:52 UTC were false (one wild upper-quantile model each): plan item D.
+5. The weekly retrain runs Sunday 2026-10-04 00:00 UTC. It is the first one to see the rebuilt features: check how many models it promotes.
+6. All API paths start with `/api/v1` (`/health` alone returns 404).
+
+**Good next work, in the order I would take it:**
+- Owner feedback on the dashboard (phone), then small fixes.
+- Decision B, then item C (daily targets, robust holdout) and item D (threshold and the wild-quantile guard). These decide what the dashboard's "Next days" tile says through the winter.
+- ~2026-10-03: go-live step 9 (item E).
+
+**Plan (Phase 6 "winter readiness", target ~2026-10-18; details in section 5a):**
+- **A. Close P0.**
+  - Coverage is 52 PM2.5 stations (session 9). The matching fix is deployed; `train_missing_models.py --apply` should take it past 60.
+  - When OpenAQ's relay delivers post-fix NO2, rerun `scripts/cpcb_subindex_study.py`: NO2 should now show ratio ~1.0 (final proof of the unit fix).
+  - Watch that CPCB-filled hours don't distort the evaluation (`/model-health`).
+- **B. Owner decision (P1 item 4):** what "no-go" means.
+  - (a) keep one hour > 91;
+  - (b) the 24 h mean >= 91 (CPCB "Poor");
+  - (c) **graded verdicts Poor / Very Poor / Severe (recommended)**, so winter days stay distinguishable.
+- **C. Build P1 item 5:** per-day targets (daily mean and/or daily max on the IST day, 5 horizons) instead of "one forecast hour per day". Backtest with `scripts/winter_eval.py` before promoting.
+  - **Make the holdout robust at the same time:** `train.py` skips a combination when the last 30 days hold no labelled feature row, however much history exists. That left 15 stations without a PM2.5 model for a week. Options: fall back to the last N labelled rows, or train without a holdout and mark the metrics missing.
+  - Gap-tolerant features were measured and are not worth it now (section 0).
+- **D. P1 item 6:** recalibrate `exceedance_probability_decision_threshold` on winter data.
+  - Include the false NO2 no-go verdicts found in session 9: a single wild upper-quantile model (386 ug/m3 where the station never passed 117) pushes the interpolated probability over 0.3. Consider capping a quantile forecast at a multiple of the station's observed maximum, or requiring the classifier to agree.
+- **E. P2:**
+  - ~Oct 3: go-live step 9 (drop sslip from `CADDY_SITE_ADDRESS` and workers.dev from CORS);
+  - Telegram alert when a digest run fails or sends 0 emails;
+  - cleanup: worktrees, the `airpollution_{sub,qa,dba,ops}_test` DBs;
+  - investigate the pre-existing failing integration test `test_regions_endpoint_and_station_region_and_local_day` (TimescaleDB chunk CheckViolation, test DB only).
+
+- **F. UI overhaul: a station dashboard with an optional map (owner decision 2026-10-01; replaces the globe).**
+  - **History:** the owner first asked for a "Google Earth"-style globe. A MapLibre + deck.gl prototype was built, merged (air-clear PR #6) and deployed on 2026-10-01. The owner then rejected it: it worked on desktop, the phone layout had problems, and it was too heavy (about 1.5 MB of JavaScript). **Do not bring the globe back.**
+  - **What the owner wants:** something like a modern weather dashboard, with a map the visitor can open and use if they want.
+  - **Built 2026-10-01: air-clear PR #7 (`feat/dashboard`), MERGED (`a26c652`) and DEPLOYED the same day; verified on the live site.**
+    - The station page (`/r/$regionId/s/$stationId`) is a grid of tiles: right now, next days, pollutants, last 48 hours, nearby stations, map. One column on a phone.
+    - The map is Leaflet with OpenStreetMap tiles, loaded only when opened (about 43 kB gzipped). Its view is limited to the region, so no international border is ever in view.
+    - The home page returns a visitor to the station they opened last (localStorage).
+    - `/globe`, `maplibre-gl` and `deck.gl` are removed (`/globe` returns 404 on the live site).
+    - Checked in Chrome at desktop width and at 390 px (in an iframe). Not checked on a real phone.
+    - Two signals can disagree on screen ("Satisfactory" right now, "Not recommended" for the next days). Both are correct; watch for owner feedback that it confuses.
+    - OpenStreetMap's public tile server is for light use: fine for a demo, a tile provider is needed if traffic grows.
+    - Deploying: in `D:\Desktop\air-clear`, `git checkout -- src/routeTree.gen.ts` before every `git pull` (each build rewrites that generated file), then `npm install` and the deploy script.
+  - Backend: `GET /api/v1/overview` (`4b6f1ec`, deployed) feeds the nearby list and the map.
+  - Ideas kept for later, from the owner's research round: a city overview page (counts per category, best and worst stations), plain guidance text per category in the style of the US EPA school flag program (it would have to come from the API, since the frontend never names a category), a calendar heat map.
+  - Five stations sit 1-6.5 km from their real place, because OpenAQ's coordinates are wrong (Pusa x2, Aya Nagar, North Campus, Sector-1 Noida). `scripts/fix_station_coordinates.py` corrects them from the CPCB feed (owner step 3 in section 0). They affect the nearby list and the map.
+  - Local run: `DEV_API_PROXY=https://air-api.himanshubaliyan.dev VITE_API_BASE_URL=http://localhost:5199 npx vite dev --port 5199`.
+  - `bun.lock` is not updated (no bun on the owner's PC); `package-lock.json` must never be committed. The owner's own clone is `D:\Desktopir-clear`; deploy from there (section 7).
+
+## 0a. Earlier session results (kept for history)
+### Session 9 details (2026-10-01)
 **Session 9 check results (public API, 2026-10-01 11:52 UTC):**
 - **The CPCB fallback works.** PM2.5 verdicts at **52 stations** (48 no-go, 4 go), up from 7. NO2 at **43** (41 go, 2 no-go), up from 0. Most forecasts were made from an hour less than 3 h old. API `/health` ok; 67 stations have current AQI.
 - **Below the 60+ target. Causes of the 33 PM2.5 no-data stations:**
@@ -38,65 +114,7 @@ Read this first in a new chat. It is the complete state of the project: goal, wh
 - The five name-matched stations (Pusa x2, Aya Nagar, North Campus, Sector-1 Noida) still showed 0 CPCB readings at 12:52: the first `current_aqi_dag` run with the new matcher was 13:40 UTC. They need about 48 h of readings before they can forecast.
 - NO2 at 8 stations is "no readings": private sensors that only measure PM2.5. Expected.
 
-**Owner steps still to run (server; any time except :40-:50):**
-1. `cd ~/air-pollution-backend && git pull`
-2. Report first, then train (about 200 combinations, roughly 10 minutes):
-   `sudo docker exec -i docker-airflow-scheduler-1 python - < scripts/train_missing_models.py`
-   `sudo docker exec -i docker-airflow-scheduler-1 python - --apply < scripts/train_missing_models.py`
-3. **Station coordinates** (built 2026-10-01, not deployed). Deploy first: the script needs the new matcher from the image.
-   `cd ~/air-pollution-backend && git pull && cd docker && sudo docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --force-recreate --build api airflow-scheduler airflow-webserver && cd ..`
-   `sudo docker exec -i docker-airflow-scheduler-1 python - < scripts/fix_station_coordinates.py` (report)
-   `sudo docker exec -i docker-airflow-scheduler-1 python - --apply --allow-grid-change < scripts/fix_station_coordinates.py`
-   `sudo docker exec -i docker-airflow-scheduler-1 python - --days 372 --station openaq:5570 < scripts/rebuild_features.py`
-   - Expected report: Pusa DPCC, Pusa IMD, North Campus and Sector-1 Noida keep their weather cell; **Aya Nagar moves from cell 28.50_77.25 to 28.50_77.00**, which is why it needs `--allow-grid-change` and the feature rebuild. Its models were trained on the old cell's weather until the Sunday retrain; it cannot forecast before about 2026-10-03 14:00 UTC anyway.
-   - MD University Rohtak is left alone: CPCB's coordinates for it are 46 km away and look wrong, ours look right.
-4. Health (two commands, not one line with a comma): `sudo docker ps` and `tail -3 ~/backups/backup.log`. Also: did Telegram show `forecast-coverage-low` "resolved"?
-
-**First checks in session 10:**
-1. `curl -s https://air-api.himanshubaliyan.dev/api/v1/overview` and count `outlooks[].overall_recommendation`. At 13:01 UTC: PM2.5 52 with a verdict (45 with all 5 days), NO2 43.
-   - Anand Vihar (`openaq:235`) and ITO (`openaq:5613`) should have a PM2.5 verdict from the 13:45 UTC run on.
-   - `train_missing_models.py --apply` was run by the owner on 2026-10-01. At 13:52 UTC: PM2.5 66 stations with a verdict (63 with all 5 days, 62 no-go), NO2 57.
-   - From about 2026-10-03 14:00 UTC the five name-matched stations should join.
-2. **Check the new models' verdicts before trusting them.** Their holdout is tiny (tens of rows), so their stored metrics mean little. Compare their no-go share with neighbouring stations.
-3. The weekly retrain runs Sunday 2026-10-04 00:00 UTC. It is the first one to see the rebuilt features: check how many models it promotes.
-4. All API paths start with `/api/v1` (`/health` alone returns 404).
-
-**Plan (Phase 6 "winter readiness", target ~2026-10-18; details in section 5a):**
-- **A. Close P0.**
-  - Coverage is 52 PM2.5 stations (session 9). The matching fix is deployed; `train_missing_models.py --apply` should take it past 60.
-  - When OpenAQ's relay delivers post-fix NO2, rerun `scripts/cpcb_subindex_study.py`: NO2 should now show ratio ~1.0 (final proof of the unit fix).
-  - Watch that CPCB-filled hours don't distort the evaluation (`/model-health`).
-- **B. Owner decision (P1 item 4):** what "no-go" means.
-  - (a) keep one hour > 91;
-  - (b) the 24 h mean >= 91 (CPCB "Poor");
-  - (c) **graded verdicts Poor / Very Poor / Severe (recommended)**, so winter days stay distinguishable.
-- **C. Build P1 item 5:** per-day targets (daily mean and/or daily max on the IST day, 5 horizons) instead of "one forecast hour per day". Backtest with `scripts/winter_eval.py` before promoting.
-  - **Make the holdout robust at the same time:** `train.py` skips a combination when the last 30 days hold no labelled feature row, however much history exists. That left 15 stations without a PM2.5 model for a week. Options: fall back to the last N labelled rows, or train without a holdout and mark the metrics missing.
-  - Gap-tolerant features were measured and are not worth it now (section 0).
-- **D. P1 item 6:** recalibrate `exceedance_probability_decision_threshold` on winter data.
-  - Include the false NO2 no-go verdicts found in session 9: a single wild upper-quantile model (386 ug/m3 where the station never passed 117) pushes the interpolated probability over 0.3. Consider capping a quantile forecast at a multiple of the station's observed maximum, or requiring the classifier to agree.
-- **E. P2:**
-  - ~Oct 3: go-live step 9 (drop sslip from `CADDY_SITE_ADDRESS` and workers.dev from CORS);
-  - Telegram alert when a digest run fails or sends 0 emails;
-  - cleanup: worktrees, the `airpollution_{sub,qa,dba,ops}_test` DBs;
-  - investigate the pre-existing failing integration test `test_regions_endpoint_and_station_region_and_local_day` (TimescaleDB chunk CheckViolation, test DB only).
-
-- **F. UI overhaul: a station dashboard with an optional map (owner decision 2026-10-01; replaces the globe).**
-  - **History:** the owner first asked for a "Google Earth"-style globe. A MapLibre + deck.gl prototype was built, merged (air-clear PR #6) and deployed on 2026-10-01. The owner then rejected it: it worked on desktop, the phone layout had problems, and it was too heavy (about 1.5 MB of JavaScript). **Do not bring the globe back.**
-  - **What the owner wants:** something like a modern weather dashboard, with a map the visitor can open and use if they want.
-  - **Built 2026-10-01: air-clear PR #7 (`feat/dashboard`), OPEN, not merged or deployed.**
-    - The station page (`/r/$regionId/s/$stationId`) is a grid of tiles: right now, next days, pollutants, last 48 hours, nearby stations, map. One column on a phone.
-    - The map is Leaflet with OpenStreetMap tiles, loaded only when opened (about 43 kB gzipped). Its view is limited to the region, so no international border is ever in view.
-    - The home page returns a visitor to the station they opened last (localStorage).
-    - `/globe`, `maplibre-gl` and `deck.gl` are removed. **Until PR #7 is deployed, the live site still has `/globe` and the "Globe view" link.**
-    - Checked in Chrome against the live API at desktop width and at 390 px (in an iframe). Not checked on a real phone.
-  - Backend: `GET /api/v1/overview` (`4b6f1ec`, deployed) feeds the nearby list and the map.
-  - Ideas kept for later, from the owner's research round: a city overview page (counts per category, best and worst stations), plain guidance text per category in the style of the US EPA school flag program (it would have to come from the API, since the frontend never names a category), a calendar heat map.
-  - Five stations sit 1-6.5 km from their real place, because OpenAQ's coordinates are wrong (Pusa x2, Aya Nagar, North Campus, Sector-1 Noida). `scripts/fix_station_coordinates.py` corrects them from the CPCB feed (owner step 3 in section 0). They affect the nearby list and the map.
-  - Local run: `DEV_API_PROXY=https://air-api.himanshubaliyan.dev VITE_API_BASE_URL=http://localhost:5199 npx vite dev --port 5199`.
-  - `bun.lock` is not updated (no bun on the owner's PC); `package-lock.json` must never be committed. The owner's own clone is `D:\Desktopir-clear`; deploy from there (section 7).
-
-## 0a. Earlier session results (kept for history)
+### Earlier sessions
 **Session 8 end state (2026-09-30 ~21:00 UTC):** Phase 4 live in demo mode (frontend https://air.himanshubaliyan.dev, API https://air-api.himanshubaliyan.dev; digest daily 12:30 UTC = 18:00 IST). NO2 unit bug fixed (data, code, models; section 5a). CPCB fallback input deployed (`03be158`, migration 0006; backfill of 9,341 readings since 09-27). OpenAQ's CPCB relay stalled again from 09-29 13:00 UTC.
 
 **Session 7 results (2026-09-27 ~17:45 UTC):**
@@ -153,7 +171,7 @@ A production-style service that tells **Delhi NCR schools whether outdoor practi
    - proved CPCB's hourly sub-index = the hourly concentration;
    - found and fixed the NO2 unit bug (data, code, models);
    - built and deployed the CPCB fallback input.
-8. **Session 9** (2026-10-01): ran the checks (PM2.5 coverage 7 -> 52); fixed the CPCB station matching and the 6 h feature refresh window; added the repair and diagnosis scripts; built `GET /overview`. Nothing deployed yet (section 0).
+8. **Session 9** (2026-10-01): ran the checks; fixed the CPCB station matching and the 6 h feature refresh window; found why 15 stations had no PM2.5 model and trained the missing models (PM2.5 coverage 7 -> 68, NO2 0 -> 58); built `GET /overview`; built, deployed and then dropped a 3D globe; replaced it with a station dashboard and an optional Leaflet map (live); wrote the coordinate fix (not yet run).
 
 ## 4. Key design decisions and why
 - Forecast models use hourly ug/m3 history only. The CPCB feed is **AQI sub-indices**. Until 2026-10-01 it powered current conditions only.
@@ -180,6 +198,8 @@ A production-style service that tells **Delhi NCR schools whether outdoor practi
 - **Session 6 bugs (2026-09-25), all fixed and tested - don't reintroduce:** NO2 stored in ppb but compared with ug/m3 thresholds (`6693c29`); current-conditions freshness shared the forecast staleness constant, so raising it would have served day-old CPCB readings as "now" (`2adf3cf`); None-F1 crashed `promote_if_better` (weekly retrain) (`bfc53b1`); after a retrain, forecast rows from old and new models coexisted at an unchanged anchor and the outlook took the worst of both (`7268c4e`); the S3 archive stamps periods at their END and some stations publish 15-minute data (`12dd226`, verified value-for-value against API rows).
 - **Forking worker processes must not inherit a pooled DB connection** ("lost synchronization with server"): `get_engine().dispose()` before `mp.Pool` and in a worker initializer. The first forced-retrain attempt crashed on this (no models written).
 - **Don't trust a provider's unit label; check it against an independent source.** OpenAQ labels CPCB NO2 "ppb", but the values are ug/m3. The 2026-09-25 "fix" converted them and overstated NO2 by 1.88x for 5 days. CPCB's own AQI feed exposed it (ratio 0.531 = 1/1.882). Before changing units, compare against a second source.
+- **Agree on the look before building an expensive visual feature.** The 3D globe took hours to build and deploy, and the owner rejected it the same day as too heavy. A short round of research and a sketch of three options settled the direction in minutes.
+- **Never have the owner paste a deploy token into the chat.** A Cloudflare token ended up in the session transcript and had to be revoked. Deploys run in the owner's own terminal.
 - **Matching two station lists by nearest coordinates alone is not enough.** OpenAQ lists some CPCB sites twice (the dead entry can be the nearer one) and misplaces others by kilometres. For 4 days Anand Vihar's current AQI sat on one entry and its forecasts on another. When a new data source is matched to stations, list every station that matched nothing and every point with two candidates, and look at them.
 - **A training rule that skips silently needs a visible count.** `train.py` skipped every combination with an empty holdout and only logged a warning; 15 stations had no PM2.5 model for a week and it looked like "no data upstream". `scripts/coverage_diagnosis.py` now names the blocking stage per station; run it whenever coverage is below expectation.
 - **A table that training reads must be refreshed over the same window as its inputs.** Ingestion re-read 72 h, features only 6 h, so late readings never became training rows. Nothing failed: the retrain just saw less data each week.
