@@ -48,7 +48,7 @@ Read this first in a new chat. It is the complete state of the project: goal, wh
 **First checks in session 10:**
 1. `curl -s https://air-api.himanshubaliyan.dev/api/v1/overview` and count `outlooks[].overall_recommendation`. At 13:01 UTC: PM2.5 52 with a verdict (45 with all 5 days), NO2 43.
    - Anand Vihar (`openaq:235`) and ITO (`openaq:5613`) should have a PM2.5 verdict from the 13:45 UTC run on.
-   - After `train_missing_models.py --apply`: expect about 65-70 PM2.5 stations with a verdict, and far fewer "partial days".
+   - `train_missing_models.py --apply` was run by the owner on 2026-10-01. At 13:52 UTC: PM2.5 66 stations with a verdict (63 with all 5 days, 62 no-go), NO2 57.
    - From about 2026-10-03 14:00 UTC the five name-matched stations should join.
 2. **Check the new models' verdicts before trusting them.** Their holdout is tiny (tens of rows), so their stored metrics mean little. Compare their no-go share with neighbouring stations.
 3. The weekly retrain runs Sunday 2026-10-04 00:00 UTC. It is the first one to see the rebuilt features: check how many models it promotes.
@@ -86,7 +86,15 @@ Read this first in a new chat. It is the complete state of the project: goal, wh
     - tapping a station opens a panel (AQI now, 5-day go/no-go, chart, subscribe); a bottom sheet on phones.
   - Backend: the **bulk endpoint is built** (`GET /api/v1/overview`, `4b6f1ec`, not yet deployed; add `?region_id=delhi-ncr` to filter). Later: a wind-field endpoint.
   - Six stations sit 1-6.5 km from their real place, because OpenAQ's coordinates are wrong (Pusa x2, Aya Nagar, North Campus, Sector-1 Noida; Rohtak differs by 46 km). The globe should not show them at the wrong spot: correct `stations.lat/lon` from the CPCB feed first (check that the weather grid cell stays the same).
-  - Next step: the clickable prototype in the air-clear repo.
+  - **Prototype built 2026-10-01** (air-clear branch `feat/globe-prototype`, commit `44a5824`): route `/globe`.
+    - Turning globe, fly-in to the region, stations as 3D columns (colour = category, grey hollow ring = no data), time steps "now" + 5 forecast days with play/pause, station panel with reading, verdict, days and a link to the station page.
+    - **MapLibre must stay on v5**: deck.gl 9.4 throws on every frame with MapLibre 6.
+    - Imagery: EOX Sentinel-2 cloudless 2020 (CC BY-NC-SA 4.0, non-commercial, credited on the map). Place names: OpenFreeMap. No borders are drawn on purpose (boundary depiction is sensitive in India).
+    - Checked in Chrome on desktop against the live API: load, fly-in, columns, station panel, forecast day. **Not checked:** phone width, and load time in a foreground tab (the test tab was a throttled background tab).
+    - Local run: `DEV_API_PROXY=https://air-api.himanshubaliyan.dev VITE_API_BASE_URL=http://localhost:5199 npx vite dev --port 5199`, then open `/globe`.
+    - `bun.lock` is not updated (no bun on the owner's PC); `package-lock.json` must never be committed.
+    - Open: forecast days are coloured by the worst-case (upper bound) category, so almost every day looks Very poor or Severe. Decision B (graded verdicts) and item C (daily targets) should supply a better per-day value.
+  - Next steps: owner review of the prototype; then haze layer, wind streaks, phone polish, and making the globe the landing page.
   - Frontend: the air-clear repo (TanStack Start; there is no map library today), deployed to Cloudflare Workers. Claude builds it, since Lovable's credits are gone.
   - Imagery licence must suit a non-commercial portfolio; check it before choosing a tile source.
 
