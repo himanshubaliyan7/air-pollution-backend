@@ -81,29 +81,20 @@ Read this first in a new chat. It is the complete state of the project: goal, wh
   - cleanup: worktrees, the `airpollution_{sub,qa,dba,ops}_test` DBs;
   - investigate the pre-existing failing integration test `test_regions_endpoint_and_station_region_and_local_day` (TimescaleDB chunk CheckViolation, test DB only).
 
-- **F. UI overhaul: a "Google Earth"-style globe (owner request 2026-10-01; runs in parallel with A-E).**
-  - Decisions: **MapLibre GL (globe projection) + deck.gl**, chosen over Cesium + Google photorealistic tiles because it is free (no billing account) and fast on phones.
-  - Order: session-9 checks first, then a **clickable prototype**: a globe that flies into Delhi NCR, with the live stations coloured by CPCB category.
-  - Vision:
-    - the site opens on a slowly turning globe and flies into the region;
-    - stations are markers or 3D columns (colour = CPCB category, height = PM2.5); no-data stations are grey and hatched, never green;
-    - an interpolated haze layer;
-    - a time slider now -> +5 days that animates the forecast;
-    - wind streaks from our weather data;
-    - tapping a station opens a panel (AQI now, 5-day go/no-go, chart, subscribe); a bottom sheet on phones.
-  - Backend: the **bulk endpoint is built** (`GET /api/v1/overview`, `4b6f1ec`, not yet deployed; add `?region_id=delhi-ncr` to filter). Later: a wind-field endpoint.
-  - Five stations sit 1-6.5 km from their real place, because OpenAQ's coordinates are wrong (Pusa x2, Aya Nagar, North Campus, Sector-1 Noida). `scripts/fix_station_coordinates.py` corrects them from the CPCB feed (owner step 3 in section 0). `scripts/seed_stations.py` no longer overwrites coordinates on a re-run. The matcher now prefers the feed station's own operator among co-located stations (the two Pusa stations end up 83 m apart).
-  - **Prototype built 2026-10-01** (air-clear PR #6, OPEN, branch `feat/globe-prototype`, commit `44a5824`; not merged or deployed): route `/globe`.
-    - Turning globe, fly-in to the region, stations as 3D columns (colour = category, grey hollow ring = no data), time steps "now" + 5 forecast days with play/pause, station panel with reading, verdict, days and a link to the station page.
-    - **MapLibre must stay on v5**: deck.gl 9.4 throws on every frame with MapLibre 6.
-    - Imagery: EOX Sentinel-2 cloudless 2020 (CC BY-NC-SA 4.0, non-commercial, credited on the map). Place names: OpenFreeMap. No borders are drawn on purpose (boundary depiction is sensitive in India).
-    - Checked in Chrome on desktop against the live API: load, fly-in, columns, station panel, forecast day. **Not checked:** phone width, and load time in a foreground tab (the test tab was a throttled background tab).
-    - Local run: `DEV_API_PROXY=https://air-api.himanshubaliyan.dev VITE_API_BASE_URL=http://localhost:5199 npx vite dev --port 5199`, then open `/globe`.
-    - `bun.lock` is not updated (no bun on the owner's PC); `package-lock.json` must never be committed.
-    - Open: forecast days are coloured by the worst-case (upper bound) category, so almost every day looks Very poor or Severe. Decision B (graded verdicts) and item C (daily targets) should supply a better per-day value.
-  - Next steps: owner review of the prototype; then haze layer, wind streaks, phone polish, and making the globe the landing page.
-  - Frontend: the air-clear repo (TanStack Start; there is no map library today), deployed to Cloudflare Workers. Claude builds it, since Lovable's credits are gone.
-  - Imagery licence must suit a non-commercial portfolio; check it before choosing a tile source.
+- **F. UI overhaul: a station dashboard with an optional map (owner decision 2026-10-01; replaces the globe).**
+  - **History:** the owner first asked for a "Google Earth"-style globe. A MapLibre + deck.gl prototype was built, merged (air-clear PR #6) and deployed on 2026-10-01. The owner then rejected it: it worked on desktop, the phone layout had problems, and it was too heavy (about 1.5 MB of JavaScript). **Do not bring the globe back.**
+  - **What the owner wants:** something like a modern weather dashboard, with a map the visitor can open and use if they want.
+  - **Built 2026-10-01: air-clear PR #7 (`feat/dashboard`), OPEN, not merged or deployed.**
+    - The station page (`/r/$regionId/s/$stationId`) is a grid of tiles: right now, next days, pollutants, last 48 hours, nearby stations, map. One column on a phone.
+    - The map is Leaflet with OpenStreetMap tiles, loaded only when opened (about 43 kB gzipped). Its view is limited to the region, so no international border is ever in view.
+    - The home page returns a visitor to the station they opened last (localStorage).
+    - `/globe`, `maplibre-gl` and `deck.gl` are removed. **Until PR #7 is deployed, the live site still has `/globe` and the "Globe view" link.**
+    - Checked in Chrome against the live API at desktop width and at 390 px (in an iframe). Not checked on a real phone.
+  - Backend: `GET /api/v1/overview` (`4b6f1ec`, deployed) feeds the nearby list and the map.
+  - Ideas kept for later, from the owner's research round: a city overview page (counts per category, best and worst stations), plain guidance text per category in the style of the US EPA school flag program (it would have to come from the API, since the frontend never names a category), a calendar heat map.
+  - Five stations sit 1-6.5 km from their real place, because OpenAQ's coordinates are wrong (Pusa x2, Aya Nagar, North Campus, Sector-1 Noida). `scripts/fix_station_coordinates.py` corrects them from the CPCB feed (owner step 3 in section 0). They affect the nearby list and the map.
+  - Local run: `DEV_API_PROXY=https://air-api.himanshubaliyan.dev VITE_API_BASE_URL=http://localhost:5199 npx vite dev --port 5199`.
+  - `bun.lock` is not updated (no bun on the owner's PC); `package-lock.json` must never be committed. The owner's own clone is `D:\Desktopir-clear`; deploy from there (section 7).
 
 ## 0a. Earlier session results (kept for history)
 **Session 8 end state (2026-09-30 ~21:00 UTC):** Phase 4 live in demo mode (frontend https://air.himanshubaliyan.dev, API https://air-api.himanshubaliyan.dev; digest daily 12:30 UTC = 18:00 IST). NO2 unit bug fixed (data, code, models; section 5a). CPCB fallback input deployed (`03be158`, migration 0006; backfill of 9,341 readings since 09-27). OpenAQ's CPCB relay stalled again from 09-29 13:00 UTC.
