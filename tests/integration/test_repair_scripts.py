@@ -102,3 +102,32 @@ def test_coverage_diagnosis_names_the_stage_that_blocks_a_forecast(db_session, m
     assert "no model: features exist" in pm25 and "| 50 " in pm25 and "| 60 " in pm25  # 50 OpenAQ hours, 60 CPCB
     assert any(line.startswith("openaq:235") and "| no2 | no readings" in line for line in lines)
     assert not any(line.startswith("openaq:5509") for line in lines)  # inactive after the merge
+
+
+def test_train_missing_models_trains_only_combinations_without_an_active_model(db_session, monkeypatch, capsys):
+    from common.constants import DEFAULT_HORIZONS_HOURS, ModelType
+    from db.models import ModelRun
+    from models.train import load_model_config
+    from scripts import train_missing_models
+    from tests.integration.test_train_predict import N_HOURS, _seed_full_dataset
+
+    station_id, _, _, base, _ = _seed_full_dataset(db_session)
+    config = load_model_config()
+    config["training"] = {**config["training"], "holdout_days": 7}  # the seeded history is 16 days long
+    monkeypatch.setattr(train_missing_models, "load_model_config", lambda: config)
+    now = base + timedelta(hours=N_HOURS)
+    n = len(DEFAULT_HORIZONS_HOURS)
+
+    assert train_missing_models.train_missing(db_session, apply=False, now=now) == {
+        ("pm25", "trainable"): n, ("no2", "too few rows"): n}
+    assert db_session.query(ModelRun).count() == 0
+
+    assert train_missing_models.train_missing(db_session, apply=True, now=now)[("pm25", "trained")] == n
+    active = db_session.query(ModelRun).filter_by(is_active=True, model_type=ModelType.QUANTILE_REGRESSOR).all()
+    assert {(r.station_id, r.pollutant, r.horizon_hours) for r in active} == {
+        (station_id, Pollutant.PM25, h) for h in DEFAULT_HORIZONS_HOURS}
+
+    # A second run finds nothing left to train for PM2.5 and replaces nothing.
+    before = db_session.query(ModelRun).count()
+    assert train_missing_models.train_missing(db_session, apply=True, now=now) == {("no2", "too few rows"): n}
+    assert db_session.query(ModelRun).count() == before

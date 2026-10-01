@@ -14,16 +14,13 @@ import argparse
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 
-from common.constants import DEFAULT_HORIZONS_HOURS, MAX_INPUT_STALENESS_HOURS, ModelType, Pollutant
+from common.constants import DEFAULT_HORIZONS_HOURS, LAG_HOURS, MAX_INPUT_STALENESS_HOURS, ModelType, Pollutant
 from db.models import Feature, Forecast, ModelRun, RawSensorReading, Station
 from db.session import get_session
 from features.feature_store import get_feature_set_version
 from models.train import load_model_config
-
-LONGEST_LAG = "lag_48h"  # non-null only when the whole lag history is there
-
 
 def _t(value) -> str:
     return value.strftime("%m-%d %H:%M") if value else "-"
@@ -48,7 +45,8 @@ def main() -> None:
         ):
             readings[(sid, pol)][source.value] = (n, first, last)
 
-        complete = Feature.features[LONGEST_LAG].astext.isnot(None)
+        # Every lag present: the rows training keeps and the hours a forecast can be made from.
+        complete = and_(*[Feature.features[f"lag_{h}h"].astext.isnot(None) for h in LAG_HOURS])
         features = {
             (sid, pol): rest
             for sid, pol, *rest in session.execute(
@@ -98,7 +96,7 @@ def main() -> None:
                     cause = "no model: no complete features" if complete_rows == 0 else (
                         "no model: nothing in holdout" if holdout_rows == 0 else "no model: features exist")
                 elif made_at is None or made_at < fresh:
-                    cause = "model but no fresh forecast (lag gaps?)"
+                    cause = "model but no fresh forecast"
                 elif horizons != set(DEFAULT_HORIZONS_HOURS):
                     cause = "some horizons lack a model"
                 else:
