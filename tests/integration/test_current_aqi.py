@@ -49,6 +49,33 @@ def test_matches_inactive_stations_too(db_session):
     assert load_aqi_snapshots(db_session, [_rec("PM2.5", 100)])["matched_stations"] == 1
 
 
+def test_cpcb_data_goes_to_the_entry_with_openaq_history_and_to_a_misplaced_station(db_session):
+    """Regression (2026-10-01): Anand Vihar's CPCB data went to a dead duplicate
+    entry that has no models, and Pusa matched nothing because OpenAQ places it
+    2.7 km from CPCB's coordinates. Both stations then had no forecast."""
+    from common.constants import Pollutant
+    from db.models import RawSensorReading
+
+    dead = _station("openaq:5509")  # exactly on the feed's coordinates
+    live = _station("openaq:235", lat=28.6468, lon=77.3160)  # 90 m away
+    pusa = _station("openaq:6356", lat=28.639645, lon=77.146262)
+    dead.name, live.name, pusa.name = "Anand Vihar, Delhi - DPCC", "Anand Vihar, New Delhi - DPCC", "Pusa, Delhi - DPCC"
+    db_session.add_all([dead, live, pusa])
+    db_session.flush()
+    db_session.add(RawSensorReading(
+        station_id="openaq:235", pollutant=Pollutant.PM25, observed_at=HOUR - timedelta(hours=47),
+        source=SensorSourceName.OPENAQ, value=60.0, unit="ug/m3", ingested_at=NOW,
+    ))
+    db_session.commit()
+
+    result = load_aqi_snapshots(db_session, [
+        _rec("PM2.5", 166, name="Anand Vihar, Delhi - DPCC"),
+        _rec("PM2.5", 120, lat=28.636818, lon=77.173597, name="Pusa, Delhi - DPCC"),
+    ])
+    assert result == {"stored": 2, "matched_stations": 2, "unmatched_stations": 0}
+    assert {r.station_id for r in db_session.query(StationAqiSnapshot).all()} == {"openaq:235", "openaq:6356"}
+
+
 def test_station_dark_on_openaq_is_kept_active_by_a_recent_snapshot(db_session, monkeypatch):
     from orchestration.plugins.common import tasks
 
