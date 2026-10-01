@@ -43,7 +43,14 @@ Read this first in a new chat. It is the complete state of the project: goal, wh
 2. Report first, then train (about 200 combinations, roughly 10 minutes):
    `sudo docker exec -i docker-airflow-scheduler-1 python - < scripts/train_missing_models.py`
    `sudo docker exec -i docker-airflow-scheduler-1 python - --apply < scripts/train_missing_models.py`
-3. Health (two commands, not one line with a comma): `sudo docker ps` and `tail -3 ~/backups/backup.log`. Also: did Telegram show `forecast-coverage-low` "resolved"?
+3. **Station coordinates** (built 2026-10-01, not deployed). Deploy first: the script needs the new matcher from the image.
+   `cd ~/air-pollution-backend && git pull && cd docker && sudo docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --force-recreate --build api airflow-scheduler airflow-webserver && cd ..`
+   `sudo docker exec -i docker-airflow-scheduler-1 python - < scripts/fix_station_coordinates.py` (report)
+   `sudo docker exec -i docker-airflow-scheduler-1 python - --apply --allow-grid-change < scripts/fix_station_coordinates.py`
+   `sudo docker exec -i docker-airflow-scheduler-1 python - --days 372 --station openaq:5570 < scripts/rebuild_features.py`
+   - Expected report: Pusa DPCC, Pusa IMD, North Campus and Sector-1 Noida keep their weather cell; **Aya Nagar moves from cell 28.50_77.25 to 28.50_77.00**, which is why it needs `--allow-grid-change` and the feature rebuild. Its models were trained on the old cell's weather until the Sunday retrain; it cannot forecast before about 2026-10-03 14:00 UTC anyway.
+   - MD University Rohtak is left alone: CPCB's coordinates for it are 46 km away and look wrong, ours look right.
+4. Health (two commands, not one line with a comma): `sudo docker ps` and `tail -3 ~/backups/backup.log`. Also: did Telegram show `forecast-coverage-low` "resolved"?
 
 **First checks in session 10:**
 1. `curl -s https://air-api.himanshubaliyan.dev/api/v1/overview` and count `outlooks[].overall_recommendation`. At 13:01 UTC: PM2.5 52 with a verdict (45 with all 5 days), NO2 43.
@@ -85,7 +92,7 @@ Read this first in a new chat. It is the complete state of the project: goal, wh
     - wind streaks from our weather data;
     - tapping a station opens a panel (AQI now, 5-day go/no-go, chart, subscribe); a bottom sheet on phones.
   - Backend: the **bulk endpoint is built** (`GET /api/v1/overview`, `4b6f1ec`, not yet deployed; add `?region_id=delhi-ncr` to filter). Later: a wind-field endpoint.
-  - Six stations sit 1-6.5 km from their real place, because OpenAQ's coordinates are wrong (Pusa x2, Aya Nagar, North Campus, Sector-1 Noida; Rohtak differs by 46 km). The globe should not show them at the wrong spot: correct `stations.lat/lon` from the CPCB feed first (check that the weather grid cell stays the same).
+  - Five stations sit 1-6.5 km from their real place, because OpenAQ's coordinates are wrong (Pusa x2, Aya Nagar, North Campus, Sector-1 Noida). `scripts/fix_station_coordinates.py` corrects them from the CPCB feed (owner step 3 in section 0). `scripts/seed_stations.py` no longer overwrites coordinates on a re-run. The matcher now prefers the feed station's own operator among co-located stations (the two Pusa stations end up 83 m apart).
   - **Prototype built 2026-10-01** (air-clear PR #6, OPEN, branch `feat/globe-prototype`, commit `44a5824`; not merged or deployed): route `/globe`.
     - Turning globe, fly-in to the region, stations as 3D columns (colour = category, grey hollow ring = no data), time steps "now" + 5 forecast days with play/pause, station panel with reading, verdict, days and a link to the station page.
     - **MapLibre must stay on v5**: deck.gl 9.4 throws on every frame with MapLibre 6.

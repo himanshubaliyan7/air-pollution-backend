@@ -66,10 +66,11 @@ def main() -> None:
         stmt = insert(Station).values(rows)
         stmt = stmt.on_conflict_do_update(
             index_elements=["station_id"],
+            # lat/lon are set only when a station is first seen: OpenAQ misplaces some
+            # CPCB sites by kilometres, and scripts/fix_station_coordinates.py corrects
+            # them from CPCB's own feed. A re-run must not put the wrong ones back.
             set_={
                 "name": stmt.excluded.name,
-                "lat": stmt.excluded.lat,
-                "lon": stmt.excluded.lon,
                 "city": stmt.excluded.city,
                 "state": stmt.excluded.state,
             },

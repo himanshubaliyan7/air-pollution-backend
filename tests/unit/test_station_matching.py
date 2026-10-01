@@ -67,6 +67,20 @@ def test_a_misplaced_station_matches_by_site_and_operator():
     assert _match(stations, "Shadipur, Delhi - CPCB", 28.6379, 77.1731) is None  # no such station of ours
 
 
+def test_two_operators_on_one_site_each_get_their_own_feed_station():
+    # After their coordinates are corrected the two Pusa stations stand 83 m apart,
+    # so both are within the radius of both feed stations.
+    dpcc = _station("openaq:6356", "Pusa, Delhi - DPCC", 28.636818, 77.173597)
+    imd = _station("openaq:5404", "Pusa, Delhi - IMD", 28.63611, 77.173332)
+    newest = {"openaq:6356": NOW - timedelta(hours=1), "openaq:5404": NOW - timedelta(hours=47)}
+    for stations in ([dpcc, imd], [imd, dpcc]):
+        assert _match(stations, "Pusa, Delhi - DPCC", 28.636818, 77.173597, newest) == "openaq:6356"
+        # The other station reports more recently, but it is not this feed station.
+        assert _match(stations, "Pusa, Delhi - IITM", 28.63611, 77.173332, newest) == "openaq:5404"
+    # A feed name that fits neither still takes the usual rule.
+    assert _match([dpcc, imd], "Somewhere Else - CPCB", 28.6365, 77.1734, newest) == "openaq:6356"
+
+
 def test_a_name_match_needs_the_operator_and_a_plausible_distance():
     private = _station("openaq:6105800", "Sector 1, Noida extension", 28.59, 77.44)
     assert _match([private], "Sector-1, Noida - UPPCB", 28.5898, 77.3101) is None

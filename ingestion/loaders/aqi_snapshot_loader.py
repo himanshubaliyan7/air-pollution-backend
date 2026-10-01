@@ -60,11 +60,15 @@ def match_station(
 ) -> Station | None:
     """The station of ours a CPCB feed station belongs to, or None.
 
-    1. Stations within MATCH_RADIUS_METERS. OpenAQ can list one site twice (a dead
-       entry next to the live one: "Anand Vihar, Delhi" and "Anand Vihar, New
-       Delhi", 90 m apart), so among several the one with the newest OpenAQ
-       reading wins: that is where the history and the models are. Before
-       2026-10-01 the nearest won, which sent CPCB data to the dead entry.
+    1. Stations within MATCH_RADIUS_METERS. Among several:
+       - two operators can share a site (Pusa DPCC and Pusa IMD stand 80 m
+         apart), so stations with the feed station's own site name and
+         operator are preferred when there are any;
+       - OpenAQ can list one site twice (a dead entry next to the live one:
+         "Anand Vihar, Delhi" and "Anand Vihar, New Delhi", 90 m apart), so the
+         one with the newest OpenAQ reading wins: that is where the history
+         and the models are. Before 2026-10-01 the nearest won, which sent
+         CPCB data to the dead entry.
     2. Otherwise the same site name and operator within NAME_MATCH_RADIUS_METERS.
 
     `newest_openaq` is station_id -> newest OpenAQ reading; ties fall back to distance."""
@@ -78,9 +82,10 @@ def match_station(
 
     distances = [(haversine_m(lat, lon, s.lat, s.lon), s) for s in stations]
     near = [c for c in distances if c[0] <= MATCH_RADIUS_METERS]
-    if near:
-        return best(near)
     key = site_and_operator(name)
+    if near:
+        same_name = [c for c in near if key is not None and site_and_operator(c[1].name) == key]
+        return best(same_name or near)
     if key is None:
         return None
     return best([c for c in distances if c[0] <= NAME_MATCH_RADIUS_METERS and site_and_operator(c[1].name) == key])

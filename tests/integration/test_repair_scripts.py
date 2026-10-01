@@ -131,3 +131,53 @@ def test_train_missing_models_trains_only_combinations_without_an_active_model(d
     before = db_session.query(ModelRun).count()
     assert train_missing_models.train_missing(db_session, apply=True, now=now) == {("no2", "too few rows"): n}
     assert db_session.query(ModelRun).count() == before
+
+
+def test_fix_station_coordinates_moves_name_matched_stations_and_guards_the_weather_cell(db_session):
+    from ingestion.loaders.aqi_snapshot_loader import load_aqi_snapshots
+    from ingestion.sources.data_gov_in import AqiRecord
+    from scripts.fix_station_coordinates import fix
+
+    db_session.add_all([
+        _station("openaq:6356", "Pusa, Delhi - DPCC", 28.639645, 77.146262),  # both Pusa stations on one wrong point
+        _station("openaq:5404", "Pusa, Delhi - IMD", 28.639645, 77.146263),
+        _station("openaq:6980", "Sector-1, Noida - UPPCB", 28.589247, 77.321962),
+        _station("openaq:5570", "Aya Nagar, New Delhi - IMD", 28.474261, 77.131606),  # the fix crosses a weather cell
+        _station("openaq:5586", "Sirifort, Delhi - CPCB", 28.5504, 77.2159),  # already in place
+    ])
+    db_session.commit()
+    feed = {
+        ("Pusa, Delhi - DPCC", 28.636818, 77.173597),
+        ("Pusa, Delhi - IITM", 28.63611, 77.173332),
+        ("Sector-1, Noida - UPPCB", 28.5898, 77.3101),
+        ("Aya Nagar, Delhi - IITM", 28.4706914, 77.1099364),
+        ("Sirifort, Delhi - CPCB", 28.5504, 77.2160),
+        ("Unknown Place - CPCB", 28.9, 77.9),
+    }
+
+    def coordinates():
+        db_session.expire_all()
+        return {s.station_id: (s.lat, s.lon) for s in db_session.query(Station).all()}
+
+    before = coordinates()
+    report = fix(db_session, feed, apply=False, allow_grid_change=False)
+    assert sorted(report["moved"]) == ["openaq:5404", "openaq:6356", "openaq:6980"]
+    assert report["skipped"] == ["openaq:5570"] and report["problems"] == []
+    db_session.rollback()
+    assert coordinates() == before  # a report changes nothing
+
+    fix(db_session, feed, apply=True, allow_grid_change=False)
+    after = coordinates()
+    assert after["openaq:6356"] == (28.636818, 77.173597) and after["openaq:5404"] == (28.63611, 77.173332)
+    assert after["openaq:6980"] == (28.5898, 77.3101)
+    assert after["openaq:5570"] == before["openaq:5570"] and after["openaq:5586"] == before["openaq:5586"]
+
+    # Now 83 m apart, each Pusa station still gets its own feed station.
+    records = [AqiRecord(name, "Delhi", "Delhi", lat, lon, "PM2.5", 1, 3, 2, HALF)
+               for name, lat, lon in feed if name.startswith("Pusa")]
+    assert load_aqi_snapshots(db_session, records)["matched_stations"] == 2
+
+    assert fix(db_session, feed, apply=True, allow_grid_change=True)["moved"] == ["openaq:5570"]
+    assert coordinates()["openaq:5570"] == (28.4706914, 77.1099364)
+    again = fix(db_session, feed, apply=True, allow_grid_change=True)
+    assert again["moved"] == [] and again["skipped"] == []  # nothing left to correct
