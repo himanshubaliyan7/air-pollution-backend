@@ -3,6 +3,12 @@
 Read this first in a new chat. It is the complete state of the project: goal, what exists, how it was built, what went wrong, and what to do next. Auto-memory (`MEMORY.md`) holds the same facts in shorter form. **No secrets are in this file.**
 
 ## 0. START HERE: session 10
+**Daily-verdict backtest, first run (owner, 2026-10-02 evening; `scripts/daily_verdict_backtest.py` at `5eb1422`): the daily-mean models LOSE to "tomorrow is like the last 24 hours".** Do not switch `forecast.target` to `daily_mean` on this evidence.
+- Onset (target days 2025-10-15..11-30, 64 stations): MAE 73-93 ug/m3 against 51-61 for the last-24h mean; bias -65 to -90; exact grade 0.43 (day +1) to 0.24 (day +5) at p >= 0.3 against 0.61 to 0.50; "too mild" 0.48-0.72 against 0.22-0.32. Only 29 % of days fell below the 90 % quantile.
+- Winter (2026-01-15..03-22, 74 stations): MAE 45-72 against 30-33; bias +31 to +61; exact 0.35-0.24 against 0.59-0.53; "too harsh" 0.59-0.71. 66-74 % of days fell below the 10 % quantile.
+- Reading (not proven): the history holds one year, so `doy_sin`/`doy_cos`/`is_stubble_season`/`is_diwali_window` identify last year's dates, not a season. Holding out a block removes the only example of those dates, and a tree cannot forecast a level it never saw there. The same effect would explain the live hourly models tripling their forecasts on 2026-10-01, the day `is_stubble_season` turned true (Shadipur: forecast 110-145, observed 36).
+- **Second run PENDING (same script, rewritten):** three remedies, all without those four features: `no-season`, `ratio` (label = log(day mean / last-24h mean)), `pooled` (ratio, one model for all stations). Owner: `git pull`, then the nohup command in the script's docstring (about 45 minutes, no deploy needed).
+
 **Session 10 first checks (public API, 2026-10-02 14:19 UTC = 19:49 IST):**
 - API `/api/v1/health` ok. `/overview`: 82 stations, 73 with current AQI.
 - **Coverage holds:** PM2.5 verdicts at **67** stations (62 no-go, 2 caution, 3 go; 66 with all 5 days), NO2 at **57** (55 go, 1 caution, 1 no-go). Most forecasts were made from an hour 2.3 h old.
