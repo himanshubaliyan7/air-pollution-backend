@@ -170,3 +170,31 @@ def test_training_on_clean_air_with_no_exceedances_does_not_crash(db_session):
         if r.quantile == 0.5
     )
     assert median.metrics["f1"] == 0.12  # the undefined-F1 candidate (compared as 0.0) did not replace it
+
+
+def test_excluded_features_are_not_trained_on_and_older_models_still_predict(db_session, monkeypatch):
+    from models import train
+
+    station_id, lat, lon, base, as_of_times = _seed_full_dataset(db_session)
+    as_of = base + timedelta(hours=N_HOURS - HORIZON_HOURS - 1)
+    config = train.load_model_config()
+    excluded = config["training"]["excluded_features"]
+    assert "is_stubble_season" in excluded and "doy_sin" in excluded
+
+    def features_of_active_models():
+        active = registry.get_active_models(db_session, station_id, Pollutant.PM25, HORIZON_HOURS, ModelType.QUANTILE_REGRESSOR)
+        return {name for row in active for name in registry.load_booster(row.artifact_path).feature_name()}
+
+    # A model from before the exclusion (trained on every column) is still served.
+    everything = {**config, "training": {**config["training"], "excluded_features": []}}
+    monkeypatch.setattr(train, "load_model_config", lambda: everything)
+    train_station_pollutant_horizon(db_session, station_id, Pollutant.PM25, HORIZON_HOURS, as_of_times[0], as_of_times[-1], holdout_days=2)
+    assert set(excluded) <= features_of_active_models()
+    assert predict.forecast(db_session, station_id, Pollutant.PM25, HORIZON_HOURS, as_of, station_lat=lat, station_lon=lon) is not None
+
+    monkeypatch.undo()
+    ids = train_station_pollutant_horizon(db_session, station_id, Pollutant.PM25, HORIZON_HOURS, as_of_times[0], as_of_times[-1], holdout_days=2)
+    for model_id in ids:
+        registry.activate_model(db_session, model_id)
+    assert not set(excluded) & features_of_active_models() and "lag_24h" in features_of_active_models()
+    assert predict.forecast(db_session, station_id, Pollutant.PM25, HORIZON_HOURS, as_of, station_lat=lat, station_lon=lon) is not None

@@ -2,26 +2,33 @@
 
 The owner chose graded verdicts on 2026-10-02: a day's verdict is the CPCB
 category of its MEAN (go below Poor, caution for Poor, no-go from Very Poor).
-This trains throwaway quantile models for "the mean of the local day k days
-ahead" (k = 1..5) on all history EXCEPT a test window, and scores them on that
-window, twice:
+This forecasts "the mean of the local day k days ahead" (k = 1..5) using all
+history EXCEPT a test window, and scores the forecasts on that window, twice:
 
   onset   2025-10-15 .. 2025-11-30   the weeks the air turns bad (Diwali, stubble)
   winter  2026-01-15 .. 2026-03-22   deep winter easing into spring
 
-First run (2026-10-02, models as production builds them: one per station, all
-features, the mean itself as the label): WORSE than "tomorrow is like the last
-24 hours" at every horizon in both windows - 43 % exact grades on day +1 at
-the onset against 61 %, with a bias of -65 to -90 ug/m3 at the onset and +31
-to +61 in winter. Reading: the history holds one year, so the day-of-year and
-stubble-season features identify last year's dates rather than a season, and a
-tree cannot forecast a level it never saw at those dates. This run tests the
-remedies, each without those features:
+Earlier runs (docs/PROJECT_HANDOFF.md section 0):
+  1. Models as production built them (one per station, every feature) were far
+     worse than "tomorrow is like the last 24 hours".
+  2. Without the day-of-year and season-flag features the bias mostly went
+     away. One model for all stations, forecasting log(day's mean / last-24h
+     mean), was the best variant, but only level with the last-24h mean in
+     exact grades. Its gain is a usable spread: a cautious rule grades fewer
+     days too mild.
 
-  no-season   one model per station, the day's mean as the label
-  ratio       one model per station; the label is log(day's mean / last-24h
-              mean), so the model only forecasts the change from today's level
-  pooled      the ratio label, one model for all stations together
+This run asks what to build:
+
+  level           no model at all: the last-24h mean times the ratio seen in the
+                  training rows (10 %, 50 %, 90 % quantiles of that ratio, all
+                  stations together). If this matches `pooled`, the trees add
+                  nothing and the simple rule is the one to ship.
+  pooled          as in run 2, for reference.
+  pooled+weather  pooled, plus the target day's own mean wind speed and
+                  humidity from the weather reanalysis. A real forecast would
+                  have to use a weather FORECAST for that day, so this is the
+                  best case: it shows whether adding weather forecasts is worth
+                  building.
 
 For each it prints, per day ahead: the error of the expected value; whether
 the 10/50/90 % quantiles hold that share of the days; and, for two decision
@@ -30,7 +37,7 @@ too harsh, with recall and precision of no-go and of caution-or-worse. The
 last line of each block is the last-24h mean itself. Nothing is written to the
 DB.
 
-Run inside the Airflow scheduler container (takes roughly 45 minutes):
+Run inside the Airflow scheduler container (roughly 30 minutes):
     nohup sudo docker exec -i docker-airflow-scheduler-1 python - < scripts/daily_verdict_backtest.py > ~/daily_backtest.log 2>&1 &
     tail -f ~/daily_backtest.log
 """
@@ -43,10 +50,11 @@ import pandas as pd
 from sqlalchemy import select
 
 from common.constants import Pollutant
-from db.models import Station
+from db.models import RawWeatherReading, Station
 from db.readings import hourly_readings
 from db.session import get_session
 from features.feature_store import read_features
+from ingestion.weather.grid import nearest_grid_cell_id
 from models import exceedance
 from models.daily import category_for_day, day_ahead_labels, local_day_means, local_days
 from models.lightgbm_pipeline import fit_quantile_model, prepare_X
@@ -68,7 +76,8 @@ BUFFER_AFTER = pd.Timedelta(days=3)
 DECISIONS = (0.3, 0.5)
 PERSISTENCE = "rolling_mean_24h"
 SEASON_FEATURES = ["doy_sin", "doy_cos", "is_stubble_season", "is_diwali_window"]
-VARIANTS = ("no-season", "ratio", "pooled")
+TARGET_WEATHER = ["wind_speed", "relative_humidity"]
+VARIANTS = ("level", "pooled", "pooled+weather")
 POOLED_THREADS = 4
 
 
@@ -131,6 +140,28 @@ def frame(variant, fold, k, station_ids, target_days, actual, level, values) -> 
     })
 
 
+def daily_weather(session, grid_cell_id: str, tz_name: str, cache: dict) -> pd.DataFrame:
+    """Mean wind speed and humidity per local day for one weather grid cell
+    (index: the day's local midnight, naive)."""
+    key = (grid_cell_id, tz_name)
+    if key not in cache:
+        rows = session.execute(
+            select(RawWeatherReading.observed_at, RawWeatherReading.wind_speed, RawWeatherReading.relative_humidity)
+            .where(RawWeatherReading.grid_cell_id == grid_cell_id, RawWeatherReading.observed_at >= HISTORY_START,
+                   RawWeatherReading.is_superseded.is_(False))
+        ).all()
+        if rows:
+            hourly = pd.DataFrame(
+                {"wind_speed": [r.wind_speed for r in rows], "relative_humidity": [r.relative_humidity for r in rows]},
+                index=pd.DatetimeIndex([r.observed_at for r in rows], tz="UTC"),
+            ).groupby(level=0).mean()
+            grouped = hourly.groupby(local_days(hourly.index, tz_name))
+            cache[key] = grouped.mean()[grouped.size() >= 18]
+        else:
+            cache[key] = pd.DataFrame(columns=TARGET_WEATHER)
+    return cache[key]
+
+
 def main() -> None:
     config = load_model_config()
     quantiles, params = sorted(config["quantiles"]), config["lightgbm"]["quantile"]
@@ -146,8 +177,8 @@ def main() -> None:
 
     session = get_session()
     stations = session.execute(select(Station).where(Station.is_active.is_(True)).order_by(Station.station_id)).scalars().all()
-    parts = []
-    loaded = []  # per station: (station_id, X, as_of_days, {k: labels})
+    loaded = []  # per station: (station_id, X, as_of_days, {k: labels}, {k: target-day weather})
+    weather_cache: dict = {}
     for station in stations:
         tz_name = station_timezone(station)
         features = read_features(session, station.station_id, POLLUTANT, HISTORY_START, now)
@@ -160,38 +191,40 @@ def main() -> None:
         if X.empty:
             continue
         as_of_days = local_days(X.index, tz_name)
-        level = X[PERSISTENCE].to_numpy()
+        weather = daily_weather(session, nearest_grid_cell_id(station.lat, station.lon), tz_name, weather_cache)
         labels = {k: day_ahead_labels(X.index, day_means, tz_name, k) for k in DAYS_AHEAD}
-        loaded.append((station.station_id, X, as_of_days, labels))
-        for k in DAYS_AHEAD:
-            y = labels[k]
-            target_days = as_of_days + pd.Timedelta(days=k)
-            for fold, (start, end) in FOLDS.items():
-                train, test = split(as_of_days, target_days, ~np.isnan(y), start, end)
-                if test.sum() < 24 * 7 or train.sum() < min_rows:
-                    continue
-                args = (fold, k, station.station_id, target_days[test], y[test], level[test])
-                parts.append(frame("no-season", *args, fit_predict(X[train], y[train], X[test], quantiles, params)))
-                ratio = fit_predict(X[train], log_ratio(y[train], level[train]), X[test], quantiles, params)
-                parts.append(frame("ratio", *args, from_log_ratio(ratio, level[test])))
-        print(f"{station.station_id} done", file=sys.stderr, flush=True)
+        target_weather = {
+            k: weather.reindex(as_of_days + pd.Timedelta(days=k))[TARGET_WEATHER].to_numpy(dtype="float64")
+            for k in DAYS_AHEAD
+        }
+        loaded.append((station.station_id, X, as_of_days, labels, target_weather))
+        print(f"{station.station_id} loaded", file=sys.stderr, flush=True)
     session.close()
 
-    X_all = pd.concat([X for _, X, _, _ in loaded], ignore_index=True)
-    as_of_all = np.concatenate([days.to_numpy() for _, _, days, _ in loaded])
-    station_all = np.concatenate([np.full(len(X), sid) for sid, X, _, _ in loaded])
+    parts = []
+    X_all = pd.concat([item[1] for item in loaded], ignore_index=True)
+    as_of_all = np.concatenate([item[2].to_numpy() for item in loaded])
+    station_all = np.concatenate([np.full(len(item[1]), item[0]) for item in loaded])
     level_all = X_all[PERSISTENCE].to_numpy()
     for k in DAYS_AHEAD:
-        y = np.concatenate([labels[k] for _, _, _, labels in loaded])
+        y = np.concatenate([item[3][k] for item in loaded])
+        weather = np.concatenate([item[4][k] for item in loaded])
+        X_weather = X_all.assign(**{f"target_day_{name}": weather[:, i] for i, name in enumerate(TARGET_WEATHER)})
+        has_weather = ~np.isnan(weather).any(axis=1)
         target_days = as_of_all + np.timedelta64(k, "D")
         for fold, (start, end) in FOLDS.items():
-            train, test = split(as_of_all, target_days, ~np.isnan(y), start.to_datetime64(), end.to_datetime64())
+            # Every variant is scored on the same rows: those whose target day has weather.
+            train, test = split(as_of_all, target_days, ~np.isnan(y) & has_weather, start.to_datetime64(), end.to_datetime64())
             if not test.any() or train.sum() < min_rows:
                 continue
-            ratio = fit_predict(X_all[train], log_ratio(y[train], level_all[train]), X_all[test], quantiles, pooled_params)
-            parts.append(frame("pooled", fold, k, station_all[test], target_days[test], y[test], level_all[test],
-                               from_log_ratio(ratio, level_all[test])))
-            print(f"pooled day +{k} {fold} done", file=sys.stderr, flush=True)
+            args = (fold, k, station_all[test], target_days[test], y[test], level_all[test])
+            ratios = log_ratio(y[train], level_all[train])
+            constant = np.tile(np.quantile(ratios, quantiles), (int(test.sum()), 1))
+            parts.append(frame("level", *args, from_log_ratio(constant, level_all[test])))
+            for variant, X in (("pooled", X_all), ("pooled+weather", X_weather)):
+                predicted = fit_predict(X[train], ratios, X[test], quantiles, pooled_params)
+                parts.append(frame(variant, *args, from_log_ratio(predicted, level_all[test])))
+            print(f"day +{k} {fold} done", file=sys.stderr, flush=True)
 
     df = pd.concat(parts, ignore_index=True)
     qcols = [f"q{i}" for i in range(len(quantiles))]
@@ -217,21 +250,20 @@ def main() -> None:
             continue
         print(f"\n== {fold}: target days {start:%Y-%m-%d} .. {end:%Y-%m-%d}")
         for k, at_k in f.groupby("k"):
-            print(f"  day +{k}")
+            g = at_k[at_k.variant == VARIANTS[0]]
+            actual = np.digitize(g.actual.to_numpy(), bounds)
+            print(f"  day +{k}: stations {g.station.nunique()}, rows {len(g)}, actual grade shares "
+                  + "/".join(f"{np.mean(actual == i):.2f}" for i in range(len(bounds) + 1))
+                  + f"; last-24h mean: MAE {np.mean(np.abs(g.persist - g.actual)):.1f}, bias {np.mean(g.persist - g.actual):+.1f}")
+            print(grade_line("last-24h mean", actual, np.digitize(g.persist.to_numpy(), bounds), no_go))
             for variant in VARIANTS:
                 g = at_k[at_k.variant == variant]
-                if g.empty:
-                    continue
-                actual = np.digitize(g.actual.to_numpy(), bounds)
                 values = g[qcols].to_numpy()
-                print(f"    {variant}: stations {g.station.nunique()}, rows {len(g)}, actual grade shares "
-                      + "/".join(f"{np.mean(actual == i):.2f}" for i in range(len(bounds) + 1))
-                      + f" | MAE {np.mean(np.abs(g[median] - g.actual)):.1f} (last-24h {np.mean(np.abs(g.persist - g.actual)):.1f})"
-                      + f", bias {np.mean(g[median] - g.actual):+.1f} | actual below "
+                print(f"    {variant}: MAE {np.mean(np.abs(g[median] - g.actual)):.1f}, bias {np.mean(g[median] - g.actual):+.1f}"
+                      + " | actual below "
                       + " ".join(f"q{q}: {np.mean(g.actual.to_numpy() < values[:, i]):.2f}" for i, q in enumerate(quantiles)))
                 for decision in DECISIONS:
                     print(grade_line(f"rule p>={decision}", actual, grades(values, quantiles, bounds, decision), no_go))
-                print(grade_line("last-24h mean", actual, np.digitize(g.persist.to_numpy(), bounds), no_go))
 
 
 if __name__ == "__main__":

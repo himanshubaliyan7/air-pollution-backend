@@ -33,3 +33,12 @@ training:
   default_training_window_days: 365
   holdout_days: 30
   min_training_rows: 100
+  # Feature columns that are computed and stored but not given to the models.
+  # The history holds one year, so day-of-year and the season flags identify
+  # last year's dates instead of a season: a model learns "high from 1 October"
+  # from the one October it saw. Measured with scripts/daily_verdict_backtest.py
+  # (2026-10-03): with them the forecast bias was -65..-90 ug/m3 on the 2025
+  # onset weeks and +31..+61 in late winter; without them -13..-40 and +6..+21.
+  # Live, the forecasts tripled on 2026-10-01, the day is_stubble_season turned
+  # true. Give them back once there are several years of history.
+  excluded_features: [doy_sin, doy_cos, is_stubble_season, is_diwali_window]
