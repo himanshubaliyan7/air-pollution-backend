@@ -4,6 +4,8 @@ from pydantic import BaseModel
 
 
 class ForecastPointOut(BaseModel):
+    # target "hourly": the hour the values are for. target "daily_mean": the start (local
+    # midnight) of the calendar day whose mean the values are for.
     target_time: datetime
     horizon_hours: int
     point_forecast: float
@@ -21,19 +23,32 @@ class ForecastSeriesOut(BaseModel):
     timezone: str | None = None
     # False when a forecast exists but is too old to act on; `forecasts` is then empty.
     is_current: bool = False
+    # What each point forecasts: "hourly" (the value at target_time) or "daily_mean" (the mean
+    # of the calendar day, in `timezone`, that starts at target_time).
+    target: str = "hourly"
     forecasts: list[ForecastPointOut]
 
 
 class ExceedanceDayOut(BaseModel):
+    """One calendar day. What the values describe depends on the summary's `target`.
+
+    "daily_mean" (graded verdicts, owner decision 2026-10-02): everything is about the day's
+    MEAN concentration. aqi_category is the worst category that mean reaches with the service's
+    decision probability, and verdict follows from it: go below the region's health-threshold
+    category, caution in it, no-go from the next one up.
+
+    "hourly": the day is represented by ONE forecast hour (the run's anchor hour + N x 24 h).
+    exceedance_flag is true when that hour is likely above the health threshold, and
+    aqi_category is the category of its upper quantile."""
+
     date: date
-    # Hourly rule (owner decision 2026-09-25: hourly values, not CPCB's 24h average). Each day
-    # is represented by ONE forecast hour - the run's anchor hour + N x 24 h - so this is true
-    # when that hour is likely above the health threshold; worst_case_value/aqi_category are its
-    # upper quantile. Other hours of the day are not forecast (see docs/PROJECT_HANDOFF.md).
-    exceedance_flag: bool
+    exceedance_flag: bool  # at or above the health threshold with the decision probability
     exceedance_probability: float
-    worst_case_value: float
+    worst_case_value: float  # upper quantile
     aqi_category: str
+    # "go" | "caution" | "no-go". Null only from a service version older than this field.
+    verdict: str | None = None
+    expected_value: float | None = None  # median forecast
 
 
 class ExceedanceSummaryOut(BaseModel):
@@ -47,13 +62,19 @@ class ExceedanceSummaryOut(BaseModel):
     # recommendation is no-data.
     forecast_made_at: datetime | None = None
     is_current: bool = False
+    # "daily_mean" or "hourly": see ExceedanceDayOut.
+    target: str = "hourly"
     days: list[ExceedanceDayOut]
-    overall_recommendation: str  # "go" | "caution" | "no-go" | "no-data" ("no-data" may still carry partial `days`)
+    # The worst verdict among `days`: "go" | "caution" | "no-go" | "no-data" ("no-data" may still carry partial `days`)
+    overall_recommendation: str
 
 
 class HistoryPointOut(BaseModel):
     time: datetime
     actual: float | None
+    # target "hourly": the first forecast made for this hour. target "daily_mean": the
+    # forecast of this hour's calendar-day mean that was made last before the day began
+    # (the same value for every hour of the day).
     forecast_value: float | None
 
 
@@ -62,4 +83,5 @@ class HistoryOut(BaseModel):
     pollutant: str
     # IANA zone of the station's region; format `time` in it.
     timezone: str | None = None
+    target: str = "hourly"  # see HistoryPointOut.forecast_value
     points: list[HistoryPointOut]

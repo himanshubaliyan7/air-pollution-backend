@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from api.db import get_db
 from api.routers.forecasts import is_forecast_current
 from api.schemas.stations import StationDetailOut, StationOut
+from common.config import forecast_target
 from common.freshness import is_reading_current
 from common.regions import region_for_point
 from db.models import Forecast, RawSensorReading, Station, StationAqiSnapshot
@@ -38,7 +39,7 @@ def list_stations(region_id: str | None = Query(None), db: Session = Depends(get
     latest_forecast = dict(
         db.execute(
             select(Forecast.station_id, func.max(Forecast.forecast_made_at))
-            .where(Forecast.forecast_made_at >= now - timedelta(days=1))
+            .where(Forecast.forecast_made_at >= now - timedelta(days=1), Forecast.target == forecast_target().value)
             .group_by(Forecast.station_id)
         ).all()
     )
@@ -80,7 +81,9 @@ def get_station(station_id: str, db: Session = Depends(get_db)):
         select(func.max(RawSensorReading.observed_at)).where(RawSensorReading.station_id == station_id)
     ).scalar_one_or_none()
     made_at = db.execute(
-        select(func.max(Forecast.forecast_made_at)).where(Forecast.station_id == station_id)
+        select(func.max(Forecast.forecast_made_at)).where(
+            Forecast.station_id == station_id, Forecast.target == forecast_target().value
+        )
     ).scalar_one_or_none()
 
     return StationDetailOut(

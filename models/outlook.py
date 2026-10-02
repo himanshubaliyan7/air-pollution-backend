@@ -3,9 +3,17 @@
 Shared by GET /forecast/{id}/exceedance and the daily alert digest, so the
 website and the email can never disagree about a day.
 
-Each configured horizon (24 h, 48 h, ...) targets a single future timestamp
-about a day apart from its neighbours, so each forecast row stands in for its
-calendar day; rows are only bucketed to the station-local calendar day.
+Which forecasts it reads depends on the model family being served
+(common.config.forecast_target):
+
+- daily_mean (owner decision 2026-10-02): each row forecasts the mean of one
+  station-local calendar day. The day's category is the worst AQI category that
+  mean reaches with the configured probability, and the verdict follows from
+  the category: go below the health threshold, caution in the health-threshold
+  category, no-go from thresholds["no_go_category"] (models/daily.py).
+- hourly: each horizon (24 h, 48 h, ...) targets a single future hour, so one
+  forecast hour stands in for its calendar day, and the day is no-go when that
+  hour is likely above the health threshold.
 """
 
 from dataclasses import dataclass
@@ -15,13 +23,15 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from common.constants import DEFAULT_HORIZONS_HOURS, MAX_INPUT_STALENESS_HOURS, Pollutant
+from common.config import forecast_target
+from common.constants import DEFAULT_HORIZONS_HOURS, DEFAULT_QUANTILES, MAX_INPUT_STALENESS_HOURS, ForecastTarget, Pollutant
 from common.freshness import floor_hour, is_input_fresh
 from common.regions import region_for_point
 from db.models import Forecast, Station
+from models.daily import category_for_day, verdict_for_category
 from models.exceedance import get_aqi_category, load_thresholds
 
-CAUTION_PROBABILITY_FLOOR = 0.15  # below the decision threshold but worth flagging as "caution"
+CAUTION_PROBABILITY_FLOOR = 0.15  # hourly family: below the decision threshold but worth flagging as "caution"
 
 
 @dataclass(frozen=True)
@@ -29,16 +39,44 @@ class OutlookDay:
     date: date
     exceedance_flag: bool
     exceedance_probability: float
+    expected_value: float
     worst_case_value: float
     aqi_category: str
+    verdict: str  # "go" | "caution" | "no-go"
 
-    @property
-    def verdict(self) -> str:
-        if self.exceedance_flag:
-            return "no-go"
-        if self.exceedance_probability >= CAUTION_PROBABILITY_FLOOR:
-            return "caution"
-        return "go"
+
+def _hourly_day(day: date, r: Forecast, thresholds: dict, pollutant: Pollutant) -> OutlookDay:
+    if r.exceedance_flag:
+        verdict = "no-go"
+    elif r.exceedance_probability >= CAUTION_PROBABILITY_FLOOR:
+        verdict = "caution"
+    else:
+        verdict = "go"
+    return OutlookDay(
+        date=day,
+        exceedance_flag=r.exceedance_flag,
+        exceedance_probability=r.exceedance_probability,
+        expected_value=r.point_forecast,
+        worst_case_value=r.quantile_high,
+        aqi_category=get_aqi_category(thresholds, pollutant, r.quantile_high),
+        verdict=verdict,
+    )
+
+
+def _daily_mean_day(day: date, r: Forecast, thresholds: dict, pollutant: Pollutant) -> OutlookDay:
+    # predict.forecast stores the lowest, median and highest fitted quantile.
+    quantiles = dict(zip((min(DEFAULT_QUANTILES), 0.5, max(DEFAULT_QUANTILES)),
+                         (r.quantile_low, r.point_forecast, r.quantile_high)))
+    category = category_for_day(quantiles, thresholds, pollutant)
+    return OutlookDay(
+        date=day,
+        exceedance_flag=r.exceedance_flag,
+        exceedance_probability=r.exceedance_probability,
+        expected_value=r.point_forecast,
+        worst_case_value=r.quantile_high,
+        aqi_category=category,
+        verdict=verdict_for_category(category, thresholds, pollutant),
+    )
 
 
 @dataclass(frozen=True)
@@ -65,9 +103,11 @@ def station_timezone(station: Station) -> str:
 
 
 def latest_forecast_made_at(session: Session, station_id: str, pollutant: Pollutant) -> datetime | None:
+    """Newest run of the model family being served."""
     return session.execute(
         select(func.max(Forecast.forecast_made_at)).where(
-            Forecast.station_id == station_id, Forecast.pollutant == pollutant
+            Forecast.station_id == station_id, Forecast.pollutant == pollutant,
+            Forecast.target == forecast_target().value,
         )
     ).scalar_one_or_none()
 
@@ -91,6 +131,7 @@ def build_outlook(
                 Forecast.station_id == station.station_id,
                 Forecast.pollutant == pollutant,
                 Forecast.forecast_made_at == made_at,
+                Forecast.target == forecast_target().value,
                 Forecast.horizon_hours <= days_ahead * 24,
             )
             .order_by(Forecast.target_time)
@@ -110,6 +151,7 @@ def build_outlooks(
     recent = (
         Forecast.forecast_made_at >= oldest_current,
         Forecast.target_time >= oldest_current,  # the hypertable's partition column: scan recent chunks only
+        Forecast.target == forecast_target().value,
     )
     made_at = {
         (sid, pol): ts
@@ -158,16 +200,8 @@ def outlook_from_rows(
         if existing is None or r.exceedance_probability > existing.exceedance_probability:
             by_day[local_date] = r
 
-    days = [
-        OutlookDay(
-            date=d,
-            exceedance_flag=r.exceedance_flag,
-            exceedance_probability=r.exceedance_probability,
-            worst_case_value=r.quantile_high,
-            aqi_category=get_aqi_category(thresholds, pollutant, r.quantile_high),
-        )
-        for d, r in sorted(by_day.items())
-    ]
+    describe = _daily_mean_day if forecast_target() is ForecastTarget.DAILY_MEAN else _hourly_day
+    days = [describe(d, r, thresholds, pollutant) for d, r in sorted(by_day.items())]
 
     # predict.forecast can skip individual horizons (missing model, gap in lag
     # history), so the newest run may cover only some days. Known bad days still
@@ -175,11 +209,12 @@ def outlook_from_rows(
     expected = {h for h in DEFAULT_HORIZONS_HOURS if h <= days_ahead * 24}
     incomplete = not expected <= {r.horizon_hours for r in rows}
 
-    if any(d.exceedance_flag for d in days):
+    verdicts = {d.verdict for d in days}
+    if "no-go" in verdicts:
         recommendation = "no-go"
     elif incomplete:
         recommendation = "no-data"
-    elif any(d.exceedance_probability >= CAUTION_PROBABILITY_FLOOR for d in days):
+    elif "caution" in verdicts:
         recommendation = "caution"
     else:
         recommendation = "go"

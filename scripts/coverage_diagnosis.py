@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_, func, select
 
+from common.config import forecast_target
 from common.constants import DEFAULT_HORIZONS_HOURS, LAG_HOURS, MAX_INPUT_STALENESS_HOURS, ModelType, Pollutant
 from db.models import Feature, Forecast, ModelRun, RawSensorReading, Station
 from db.session import get_session
@@ -33,6 +34,7 @@ def main() -> None:
 
     now = datetime.now(timezone.utc)
     holdout_start = now - timedelta(days=load_model_config()["training"]["holdout_days"])
+    target = forecast_target().value  # models and forecasts of the family being served
     session = get_session()
     try:
         stations = session.execute(select(Station).where(Station.is_active.is_(True)).order_by(Station.name)).scalars().all()
@@ -62,7 +64,8 @@ def main() -> None:
         models = defaultdict(set)
         for sid, pol, horizon in session.execute(
             select(ModelRun.station_id, ModelRun.pollutant, ModelRun.horizon_hours)
-            .where(ModelRun.is_active.is_(True), ModelRun.model_type == ModelType.QUANTILE_REGRESSOR).distinct()
+            .where(ModelRun.is_active.is_(True), ModelRun.model_type == ModelType.QUANTILE_REGRESSOR,
+                   ModelRun.target == target).distinct()
         ):
             models[(sid, pol)].add(horizon)
 
@@ -70,14 +73,14 @@ def main() -> None:
             (sid, pol): made_at
             for sid, pol, made_at in session.execute(
                 select(Forecast.station_id, Forecast.pollutant, func.max(Forecast.forecast_made_at))
-                .where(Forecast.target_time >= now - timedelta(days=10))
+                .where(Forecast.target_time >= now - timedelta(days=10), Forecast.target == target)
                 .group_by(Forecast.station_id, Forecast.pollutant)
             )
         }
 
         fresh = now - timedelta(hours=MAX_INPUT_STALENESS_HOURS)
         causes = defaultdict(int)
-        print(f"as of {now:%Y-%m-%d %H:%M} UTC; holdout starts {holdout_start:%m-%d}; times are UTC month-day")
+        print(f"as of {now:%Y-%m-%d %H:%M} UTC; target {target}; holdout starts {holdout_start:%m-%d}; times are UTC month-day")
         print("station | pollutant | cause | openaq n first..last | cpcb n first..last | "
               "features all/complete/complete-in-holdout newest-complete | model horizons | newest forecast")
         for station in stations:
