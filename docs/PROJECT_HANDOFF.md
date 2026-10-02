@@ -3,6 +3,17 @@
 Read this first in a new chat. It is the complete state of the project: goal, what exists, how it was built, what went wrong, and what to do next. Auto-memory (`MEMORY.md`) holds the same facts in shorter form. **No secrets are in this file.**
 
 ## 0. START HERE: session 10
+**Session 10 first checks (public API, 2026-10-02 14:19 UTC = 19:49 IST):**
+- API `/api/v1/health` ok. `/overview`: 82 stations, 73 with current AQI.
+- **Coverage holds:** PM2.5 verdicts at **67** stations (62 no-go, 2 caution, 3 go; 66 with all 5 days), NO2 at **57** (55 go, 1 caution, 1 no-go). Most forecasts were made from an hour 2.3 h old.
+- Manesar recovered. **Alipur, Ashok Vihar (PM2.5) and Sector 11 Faridabad have not**, a day later. Also no PM2.5 verdict: Knowledge Park III, Major Dhyan Chand Stadium, Sector 125 Noida, Wave City, New Industrial Town (all have current AQI), plus the five name-matched stations (expected until about 2026-10-03 14:00 UTC), MD University Rohtak and Ved Vihar-Loni. Cause not checked: run `scripts/coverage_diagnosis.py`.
+- **NEW, serious: the API serves impossible PM2.5 forecasts.** Shadipur (`openaq:5630`): point forecast **8,243 ug/m3** at 120 h, upper quantiles 575 / 4,253 / 1,928 / 5,234 / 8,243. Its observed 90-day maximum is 205 and the last 48 h averaged 36. Sector-51 Gurugram reaches 2,099, NSIT Dwarka 582, Sri Aurobindo Marg 470. These are old models from the weekly retrain, not the ones from `train_missing_models.py`.
+  - **Likely cause (not proven; production data cannot be read from the dev PC):** no step rejects an implausible reading (`sensor_loader`, `db/readings.py::hourly_readings`, `features`, `train.py`). An instrument fault in the 372-day training window becomes a label, and a tree model can only predict 8,243 if it saw labels that high. Even the last 90 days hold spikes of 533 (NSIT Dwarka) and 639 (Sector-51 Gurugram) where the median is 24-52.
+  - **Owner step (read-only): `sudo docker exec -i docker-airflow-scheduler-1 python - < scripts/reading_outlier_diagnosis.py`** from `~/air-pollution-backend` after `git pull`. It counts readings above 500 / 1,000 / 2,000 / 5,000 per source, lists the worst stations, and sets the current wild forecasts next to those stations' readings.
+  - **Then (plan item D, first part):** drop implausible readings in `hourly_readings` (one rule for features, labels, evaluation and the history chart) with limits chosen from that output, rebuild features (`rebuild_features.py --days 372`), retrain. A cap at serving time would hide the number but leave the verdict wrong: Shadipur's probability is 0.9 because its median model is wrong.
+  - The same cause probably explains the false NO2 no-go (Sanjay Nagar: upper quantile 408, observed 90-day maximum 117).
+- **Forecasts still lean high everywhere.** Median upper quantile 145-173 ug/m3 and 50-58 of 67 stations flagged on each day, while current AQI is Moderate at 47 stations, Poor at 16, Satisfactory at 4. Where a past forecast can be compared: Shadipur median forecast 95 vs 32 observed, NSIT Dwarka 114 vs 25, Sri Aurobindo Marg 77 vs 55. Mandir Marg and Najafgarh (models from `train_missing_models.py`) look like their neighbours: high but not wild.
+
 **State at the end of session 9 (2026-10-01 17:20 UTC = 22:50 IST).** Session 9 was long: checks, coverage fixes, a globe that was built and then dropped, and a new dashboard. The details are in section 0a ("Session 9 details").
 
 **What is live:**
