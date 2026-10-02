@@ -19,9 +19,10 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-from common.constants import ModelType, Pollutant
+from common.constants import ForecastTarget, ModelType, Pollutant
 from features.build_features import build_feature_frame
 from models import exceedance, registry
+from models.daily import monotone
 from models.lightgbm_pipeline import predict as lgbm_predict
 from models.lightgbm_pipeline import prepare_X
 
@@ -45,11 +46,17 @@ def forecast(
     station_lat: float,
     station_lon: float,
     thresholds: dict | None = None,
+    target: ForecastTarget | None = None,
 ) -> ForecastResult | None:
+    """One horizon's forecast from the active quantile models of `target`
+    (default: the family being served). For daily-mean models every value is
+    about the mean of the local day horizon_hours / 24 days after as_of's day."""
     thresholds = thresholds or exceedance.load_thresholds()
     threshold_conc = exceedance.get_health_threshold_concentration(pollutant, thresholds)
 
-    quantile_models = registry.get_active_models(session, station_id, pollutant, horizon_hours, ModelType.QUANTILE_REGRESSOR)
+    quantile_models = registry.get_active_models(
+        session, station_id, pollutant, horizon_hours, ModelType.QUANTILE_REGRESSOR, target
+    )
     if not quantile_models:
         return None  # not trained yet for this key
 
@@ -84,6 +91,7 @@ def forecast(
 
     if not quantile_preds:
         return None
+    quantile_preds = monotone(quantile_preds)  # separately fitted quantiles can cross
 
     probability = exceedance.probability_from_quantiles(quantile_preds, threshold_conc)
     flag = exceedance.classify_exceedance(probability, thresholds=thresholds)

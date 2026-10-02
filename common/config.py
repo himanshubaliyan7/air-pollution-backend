@@ -6,7 +6,7 @@ import yaml
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from common.constants import IST_OFFSET_HOURS
+from common.constants import IST_OFFSET_HOURS, ForecastTarget
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IST = timezone(timedelta(hours=IST_OFFSET_HOURS))
@@ -71,6 +71,10 @@ class Settings(BaseSettings):
         allowlist = self.subscription_allowlist()
         return allowlist is None or email.strip().lower() in allowlist
 
+    # Overrides config/settings.yaml forecast.target when set ("hourly" or
+    # "daily_mean"): switches the served model family without an image rebuild.
+    forecast_target: str = ""
+
     openaq_api_key: str = ""
     # Free personal key from data.gov.in (My Account). Empty = current-AQI ingestion is skipped.
     data_gov_in_api_key: str = ""
@@ -114,6 +118,15 @@ def get_settings() -> Settings:
 def load_yaml_config(path: Path) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+def forecast_target() -> ForecastTarget:
+    """The model family that is trained, forecast with and served
+    (config/settings.yaml forecast.target, or the FORECAST_TARGET environment
+    variable). The other family's rows stay in the database untouched, so
+    switching back is a config change."""
+    settings = get_settings()
+    return ForecastTarget(settings.forecast_target or load_yaml_config(settings.settings_config_path)["forecast"]["target"])
 
 
 def utc_now() -> datetime:

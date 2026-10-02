@@ -2,6 +2,14 @@
 
 forecast:
   horizons_hours: [24, 48, 72, 96, 120]
+  # Which model family is trained, forecast with and served:
+  #   hourly      the value at as_of + N x 24 h; a day is no-go when that one
+  #               hour is likely above the health threshold (until 2026-10).
+  #   daily_mean  the mean of each of the next five local days, graded by AQI
+  #               category (owner decision 2026-10-02; models/daily.py).
+  # Models and forecasts of both families can coexist (their `target` column),
+  # so this can be switched in either direction.
+  target: hourly
   quantiles: [0.1, 0.5, 0.9]
 
 features:

@@ -46,6 +46,7 @@ from sqlalchemy.orm import declarative_base, relationship
 
 from common.constants import (
     AlertStatus,
+    ForecastTarget,
     ModelType,
     Pollutant,
     SensorSourceName,
@@ -155,6 +156,9 @@ class ModelRun(Base):
     metrics = Column(JSONB, nullable=False, default=dict)
     hyperparams = Column(JSONB, nullable=False, default=dict)
     is_active = Column(Boolean, nullable=False, default=False)
+    # common.constants.ForecastTarget. Part of the key is_active is unique over:
+    # an hourly and a daily-mean model can both be active for one horizon.
+    target = Column(String, nullable=False, default=ForecastTarget.HOURLY.value, server_default=ForecastTarget.HOURLY.value)
 
 
 class Forecast(Base):
@@ -173,6 +177,9 @@ class Forecast(Base):
     quantile_high = Column(Float, nullable=False)
     exceedance_probability = Column(Float, nullable=False)
     exceedance_flag = Column(Boolean, nullable=False)
+    # common.constants.ForecastTarget: what point_forecast and the quantiles are
+    # (a daily-mean row's target_time is the target day's local midnight).
+    target = Column(String, nullable=False, default=ForecastTarget.HOURLY.value, server_default=ForecastTarget.HOURLY.value)
 
 
 class ExceedanceEvaluation(Base):

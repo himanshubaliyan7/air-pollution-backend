@@ -8,6 +8,9 @@ pure parts shared by training, serving and the backtest: the labels, and the
 rule that turns a day's quantile forecasts into a category and a verdict.
 """
 
+from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
+
 import numpy as np
 import pandas as pd
 
@@ -41,6 +44,14 @@ def day_ahead_labels(as_of: pd.DatetimeIndex, day_means: pd.Series, tz_name: str
     the one it falls in (NaN where that day has no usable mean)."""
     target_days = local_days(as_of, tz_name) + pd.Timedelta(days=days_ahead)
     return day_means.reindex(target_days).to_numpy(dtype="float64")
+
+
+def target_day_start(as_of: datetime, tz_name: str, days_ahead: int) -> datetime:
+    """Local midnight (as UTC) of the day `days_ahead` days after the one
+    `as_of` falls in: the target_time of a daily-mean forecast."""
+    zone = ZoneInfo(tz_name)
+    day = as_of.astimezone(zone).date() + timedelta(days=days_ahead)
+    return datetime.combine(day, time.min, tzinfo=zone).astimezone(timezone.utc)
 
 
 def monotone(quantile_predictions: dict[float, float]) -> dict[float, float]:
