@@ -209,3 +209,46 @@ def test_evaluation_scores_a_daily_forecast_against_the_days_mean(db_session, mo
     db_session.commit()
     monkeypatch.setattr(tasks, "datetime", fixed_datetime(day_start + timedelta(hours=20)))
     assert tasks.evaluate_recent_forecasts() == 0
+
+
+def test_digest_legend_explains_the_verdicts_of_the_family_being_served(daily_target, monkeypatch):
+    from alerting.digest import _legend
+
+    assert _legend() == {
+        "go": "the day's average is expected to stay below Poor.",
+        "caution": "the day's average is expected to be Poor.",
+        "no-go": "the day's average is expected to be Very Poor or worse; outdoor practice not recommended.",
+    }
+    monkeypatch.setattr(get_settings(), "forecast_target", ForecastTarget.HOURLY.value)
+    assert _legend()["go"] == "no health-threshold exceedance expected."
+
+
+def test_switch_rehearsal_train_and_forecast_the_daily_family_while_the_hourly_one_is_served(db_session, monkeypatch, tmp_path):
+    """The cutover: scripts/retrain_models.py --target daily_mean, then
+    scripts/generate_forecasts.py --target daily_mean, then the config switch."""
+    from models.train import load_model_config
+    from scripts import retrain_models
+
+    monkeypatch.setattr(get_settings(), "model_artifacts_dir", tmp_path)
+    station_id, _, _, base, _ = _seed_full_dataset(db_session, level=200.0)
+    config = load_model_config()
+    config["training"] = {**config["training"], "holdout_days": 7}  # the seeded history is 16 days long
+    monkeypatch.setattr(retrain_models, "load_model_config", lambda: config)
+    now = NEWEST + timedelta(minutes=45)
+    monkeypatch.setattr(tasks, "datetime", fixed_datetime(now))
+    station = db_session.get(Station, station_id)
+
+    hourly = retrain_models.retrain(db_session, True, [Pollutant.PM25], None, now=now)
+    daily = retrain_models.retrain(db_session, True, [Pollutant.PM25], None, now=now, target=ForecastTarget.DAILY_MEAN)
+    n = len(DEFAULT_HORIZONS_HOURS)
+    assert hourly["activated"] == daily["activated"] == 4 * n  # neither run deactivated the other family's models
+    assert db_session.query(ModelRun).filter_by(is_active=True).count() == 8 * n
+
+    assert tasks.generate_forecasts()["forecasts_written"] == n
+    assert tasks.generate_forecasts(ForecastTarget.DAILY_MEAN)["forecasts_written"] == n
+    assert build_outlook(db_session, station, Pollutant.PM25, now=now).days[0].date.isoformat() == "2026-01-18"
+
+    monkeypatch.setattr(get_settings(), "forecast_target", DAILY)  # the switch
+    outlook = build_outlook(db_session, station, Pollutant.PM25, now=now)
+    assert outlook.is_current and len(outlook.days) == n
+    assert {d.aqi_category for d in outlook.days} == {"very_poor"} and outlook.overall_recommendation == "no-go"

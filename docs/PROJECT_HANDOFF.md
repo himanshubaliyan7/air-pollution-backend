@@ -3,6 +3,18 @@
 Read this first in a new chat. It is the complete state of the project: goal, what exists, how it was built, what went wrong, and what to do next. Auto-memory (`MEMORY.md`) holds the same facts in shorter form. **No secrets are in this file.**
 
 ## 0. START HERE: session 10
+**Decision B is made (owner, 2026-10-02): graded verdicts on the IST-day mean.** A day's verdict is the CPCB category of that day's mean: go below Poor (< 91 ug/m3 PM2.5), caution for Poor, no-go from Very Poor (`no_go_category` in `config/thresholds_cpcb.yaml`).
+- **Built on branch `feat/daily-verdicts` (not merged, not deployed; 223 tests pass):**
+  - A second model family, `daily_mean`: each horizon (24..120 h) forecasts the mean of the local day 1..5 days after the anchor's day (`models/daily.py`). A forecast row's `target_time` is that day's local midnight.
+  - `model_runs.target` and `forecasts.target` (migration 0007, default `hourly`): both families coexist, each with its own active models. `config/settings.yaml forecast.target` (or the `FORECAST_TARGET` env var) says which one is trained, forecast with and served. It is still `hourly`.
+  - Outlook: for `daily_mean` a day's `aqi_category` is the worst category its mean reaches with probability >= `exceedance_probability_decision_threshold`, and the verdict follows from the category. API: `ExceedanceDayOut` gained `verdict` and `expected_value`; summary, series and history gained `target`. History shows the last forecast made before each day against that day's hours. The nightly evaluation scores a daily forecast against the day's mean (>= 18 measured hours).
+  - Scripts: `retrain_models.py --target daily_mean` (first models of a family that is not served yet), `generate_forecasts.py --target daily_mean` (its forecasts, so the switch shows no gap).
+- **Backtest first: `scripts/daily_verdict_backtest.py` (on `main`, `5eb1422`), owner-run, read-only.** It decides the decision probability (0.3 / 0.4 / 0.5) and shows whether the daily models beat "tomorrow is like the last 24 hours". Result: PENDING.
+- **Cutover, once the backtest is read (all owner-run):** merge the branch; deploy with `db-migrate` added to the service list (migration 0007); `retrain_models.py --apply --target daily_mean`; `generate_forecasts.py --target daily_mean`; then set `forecast.target: daily_mean`, push, deploy again. Rollback: set it back to `hourly` and deploy (the hourly models stay active, but they age: the weekly retrain only trains the served family).
+- **Frontend (air-clear):** works unchanged (each day already shows its category), but its wording still describes the hourly rule; a PR for the texts and the forecast page is still to do. The banner shows the worst of the five days, which in winter will be no-go most days: consider showing tomorrow's verdict there.
+- Not done: robust holdout (item C, second half); `test_regions_endpoint_and_station_region_and_local_day` still deselected.
+- Local testing works again: Docker Desktop + `docker compose up -d postgres`; `scratchpad/runtests.sh` pattern = read `POSTGRES_USER`/`POSTGRES_PASSWORD` from `docker/.env` (do not source the whole file: it sets container paths), set `TEST_DATABASE_URL`, run `python -m scripts.setup_test_db` after adding a migration.
+
 **Session 10 first checks (public API, 2026-10-02 14:19 UTC = 19:49 IST):**
 - API `/api/v1/health` ok. `/overview`: 82 stations, 73 with current AQI.
 - **Coverage holds:** PM2.5 verdicts at **67** stations (62 no-go, 2 caution, 3 go; 66 with all 5 days), NO2 at **57** (55 go, 1 caution, 1 no-go). Most forecasts were made from an hour 2.3 h old.
