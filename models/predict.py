@@ -77,7 +77,9 @@ def forecast(
                 row.artifact_path, station_id, pollutant.value, horizon_hours, exc,
             )
             continue
-        pred = float(lgbm_predict(booster, X)[0])
+        # Each model gets the columns it was trained on: models from before a
+        # change to training.excluded_features keep working until retrained.
+        pred = float(lgbm_predict(booster, X[booster.feature_name()])[0])
         quantile_preds[row.quantile] = pred
         if row.quantile == 0.5:
             median_model_id = row.model_id

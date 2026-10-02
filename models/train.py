@@ -78,7 +78,8 @@ def build_training_matrix(
     combined = combined.dropna()
 
     y = combined.pop("__label__")
-    X = prepare_X(combined)
+    excluded = load_model_config()["training"].get("excluded_features", [])
+    X = prepare_X(combined).drop(columns=excluded, errors="ignore")
     return X, y
 
 
