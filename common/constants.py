@@ -62,6 +62,17 @@ MAX_INPUT_STALENESS_HOURS = 24
 # is presented as what the air is like now, so a day-old one must not qualify.
 MAX_CURRENT_READING_AGE_HOURS = 6
 
+# Hourly concentrations (ug/m3) outside this range are instrument faults, not
+# air: db/readings.py leaves them out for every consumer. They stay in
+# raw_sensor_readings. Measured over the 365 days to 2026-10-02
+# (scripts/reading_outlier_diagnosis.py): OpenAQ held PM2.5 readings of exactly
+# 10,000 at six stations and one of 2,938,322, and the models trained on them
+# forecast up to 8,243. The PM2.5 limit sits above the real Diwali-night peaks
+# (ten stations reached 1,750-1,900 from 2025-10-20 16:00 UTC) and below the
+# next values seen (2,183 and up): 171 of 511,026 readings. NO2: 14 of 78
+# stations ever passed 400, mostly in episodes of a few days.
+PLAUSIBLE_RANGE = {Pollutant.PM25: (0.0, 2000.0), Pollutant.NO2: (0.0, 500.0)}
+
 # Quantiles fitted per horizon; used both for uncertainty bands and for
 # interpolating P(value > threshold) in models/exceedance.py.
 DEFAULT_QUANTILES = [0.1, 0.5, 0.9]

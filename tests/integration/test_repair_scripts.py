@@ -133,6 +133,42 @@ def test_train_missing_models_trains_only_combinations_without_an_active_model(d
     assert db_session.query(ModelRun).count() == before
 
 
+def test_retrain_models_replaces_every_active_model_whatever_its_score(db_session, monkeypatch):
+    from common.constants import DEFAULT_HORIZONS_HOURS
+    from db.models import ModelRun
+    from models.train import load_model_config
+    from scripts import retrain_models
+    from tests.integration.test_train_predict import N_HOURS, _seed_full_dataset
+
+    station_id, _, _, base, _ = _seed_full_dataset(db_session)
+    config = load_model_config()
+    config["training"] = {**config["training"], "holdout_days": 7}  # the seeded history is 16 days long
+    monkeypatch.setattr(retrain_models, "load_model_config", lambda: config)
+    now = base + timedelta(hours=N_HOURS)
+    n = len(DEFAULT_HORIZONS_HOURS)
+
+    def active_ids():
+        db_session.expire_all()
+        return {r.model_id for r in db_session.query(ModelRun).filter_by(is_active=True).all()}
+
+    first = retrain_models.retrain(db_session, True, list(Pollutant), None, now=now)
+    assert (first["trained"], first["skipped"], first["failed"], first["kept"]) == (n, n, 0, [])  # NO2 has too few rows
+    old = active_ids()
+    assert len(old) == first["activated"] == 4 * n  # three quantiles and the classifier per horizon
+
+    # A score the weekly retrain's promote_if_better could never beat.
+    for row in db_session.query(ModelRun).filter_by(is_active=True).all():
+        row.metrics = {**row.metrics, "f1": 2.0}
+    db_session.commit()
+
+    assert retrain_models.retrain(db_session, False, list(Pollutant), None, now=now)["activated"] == 0
+    assert active_ids() == old  # a report changes nothing
+
+    second = retrain_models.retrain(db_session, True, [Pollutant.PM25], [station_id], now=now)
+    assert second["activated"] == 4 * n and second["kept"] == []
+    assert len(active_ids()) == 4 * n and not active_ids() & old
+
+
 def test_fix_station_coordinates_moves_name_matched_stations_and_guards_the_weather_cell(db_session):
     from ingestion.loaders.aqi_snapshot_loader import load_aqi_snapshots
     from ingestion.sources.data_gov_in import AqiRecord

@@ -6,6 +6,9 @@ forecast evaluation, the API's history chart - must pick the same value, so
 the rule lives here: the higher-precedence source wins, CPCB only fills hours
 OpenAQ lacks. The models were trained on OpenAQ data; CPCB matched it with a
 median error of 1.2 ug/m3 for PM2.5 (scripts/cpcb_subindex_study.py).
+
+The same rule drops instrument faults (common.constants.PLAUSIBLE_RANGE), so
+no consumer ever sees one.
 """
 
 from datetime import datetime
@@ -13,10 +16,17 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from common.constants import Pollutant, SensorSourceName
+from common.constants import PLAUSIBLE_RANGE, Pollutant, SensorSourceName
 from db.models import RawSensorReading
 
 SOURCE_PRECEDENCE = {SensorSourceName.OPENAQ: 0, SensorSourceName.CPCB: 1}  # lower wins
+
+
+def is_plausible(pollutant: Pollutant, value: float) -> bool:
+    """False for an instrument fault (negative, or beyond PLAUSIBLE_RANGE).
+    Such an hour counts as missing, so the other source may fill it."""
+    low, high = PLAUSIBLE_RANGE[pollutant]
+    return low <= value <= high
 
 
 def one_value_per_hour(rows) -> list[tuple[datetime, float]]:
@@ -43,4 +53,4 @@ def hourly_readings(
     rows = session.execute(
         select(RawSensorReading.observed_at, RawSensorReading.value, RawSensorReading.source).where(*conditions)
     ).all()
-    return one_value_per_hour(rows)
+    return one_value_per_hour([r for r in rows if is_plausible(pollutant, r.value)])
