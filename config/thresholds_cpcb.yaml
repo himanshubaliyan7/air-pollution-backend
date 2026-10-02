@@ -70,6 +70,11 @@ pollutants:
 # their own risk tolerance without any code change.
 health_threshold_category: poor
 
+# Graded daily verdicts (owner decision 2026-10-02): a day whose mean is in the
+# health-threshold category is "caution"; from this category upwards it is
+# "no-go". Below the health threshold it is "go".
+no_go_category: very_poor
+
 # Decision threshold on the model's exceedance_probability (0-1) for setting
 # forecasts.exceedance_flag = true. Recall is weighted over precision here
 # (a missed bad-air day is worse than an extra false alarm) - see
