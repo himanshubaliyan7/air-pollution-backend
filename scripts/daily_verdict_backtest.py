@@ -17,7 +17,7 @@ Earlier runs (docs/PROJECT_HANDOFF.md section 0):
      exact grades. Its gain is a usable spread: a cautious rule grades fewer
      days too mild.
 
-This run asks what to build:
+Run 3 (2026-10-03) asked what to build:
 
   level           no model at all: the last-24h mean times the ratio seen in the
                   training rows (10 %, 50 %, 90 % quantiles of that ratio, all
@@ -30,17 +30,29 @@ This run asks what to build:
                   best case: it shows whether adding weather forecasts is worth
                   building.
 
-For each it prints, per day ahead: the error of the expected value; whether
-the 10/50/90 % quantiles hold that share of the days; and, for two decision
-probabilities, how often the grade is exact, too mild (the dangerous error) or
-too harsh, with recall and precision of no-go and of caution-or-worse. The
-last line of each block is the last-24h mean itself. Nothing is written to the
-DB.
+Result: `level` is as exact as `pooled` (0.61-0.50 at the onset, 0.58-0.52 in
+winter at p >= 0.5) and its quantiles are the best calibrated (8 / 47 / 91 % of
+onset days below q0.1 / q0.5 / q0.9). Perfect weather adds 2-8 points in winter
+and nothing at the onset. So the model-free rule is the candidate, and what is
+left to choose is the decision probability.
 
-Run inside the Airflow scheduler container (roughly 30 minutes):
-    nohup sudo docker exec -i docker-airflow-scheduler-1 python - < scripts/daily_verdict_backtest.py > ~/daily_backtest.log 2>&1 &
-    tail -f ~/daily_backtest.log
+By default this now runs `level` only (a few minutes) for decision
+probabilities 0.3, 0.4 and 0.5; --models adds the two pooled models again
+(roughly 30 minutes).
+
+For each it prints, per day ahead: the error of the expected value; whether
+the 10/50/90 % quantiles hold that share of the days; and, per decision
+probability, how often the grade is exact, too mild (the dangerous error) or
+too harsh, with recall and precision of no-go and of caution-or-worse, and how
+many real no-go days were called "go". The first line of each block is the
+last-24h mean itself. Nothing is written to the DB.
+
+Run inside the Airflow scheduler container:
+    sudo docker exec -i docker-airflow-scheduler-1 python - < scripts/daily_verdict_backtest.py 2> /dev/null
+    nohup sudo docker exec -i docker-airflow-scheduler-1 python - --models < scripts/daily_verdict_backtest.py > ~/daily_backtest.log 2>&1 &
 """
+
+import argparse
 
 import sys
 from datetime import datetime, timezone
@@ -73,7 +85,7 @@ DAYS_AHEAD = (1, 2, 3, 4, 5)
 # its own day, and a row after the window looks back 48 h.
 BUFFER_BEFORE = pd.Timedelta(days=7)
 BUFFER_AFTER = pd.Timedelta(days=3)
-DECISIONS = (0.3, 0.5)
+DECISIONS = (0.3, 0.4, 0.5)
 PERSISTENCE = "rolling_mean_24h"
 SEASON_FEATURES = ["doy_sin", "doy_cos", "is_stubble_season", "is_diwali_window"]
 TARGET_WEATHER = ["wind_speed", "relative_humidity"]
@@ -109,7 +121,8 @@ def prf(actual: np.ndarray, predicted: np.ndarray) -> str:
 def grade_line(name: str, actual: np.ndarray, predicted: np.ndarray, no_go: int) -> str:
     return (f"      {name:14s} exact {np.mean(predicted == actual):.2f}  too mild {np.mean(predicted < actual):.2f}  "
             f"too harsh {np.mean(predicted > actual):.2f} | no-go {prf(actual >= no_go, predicted >= no_go)} | "
-            f"caution or worse {prf(actual >= 1, predicted >= 1)} | shares "
+            f"caution or worse {prf(actual >= 1, predicted >= 1)} | "
+            f"no-go days called go {np.mean(predicted[actual >= no_go] == 0) if (actual >= no_go).any() else float('nan'):.2f} | shares "
             + "/".join(f"{np.mean(predicted == g):.2f}" for g in range(int(max(actual.max(), predicted.max())) + 1)))
 
 
@@ -163,6 +176,10 @@ def daily_weather(session, grid_cell_id: str, tz_name: str, cache: dict) -> pd.D
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--models", action="store_true", help="also fit the pooled models (slow)")
+    with_models = parser.parse_args().models
+    variants = VARIANTS if with_models else VARIANTS[:1]
     config = load_model_config()
     quantiles, params = sorted(config["quantiles"]), config["lightgbm"]["quantile"]
     pooled_params = {**params, "num_threads": POOLED_THREADS}
@@ -221,7 +238,7 @@ def main() -> None:
             ratios = log_ratio(y[train], level_all[train])
             constant = np.tile(np.quantile(ratios, quantiles), (int(test.sum()), 1))
             parts.append(frame("level", *args, from_log_ratio(constant, level_all[test])))
-            for variant, X in (("pooled", X_all), ("pooled+weather", X_weather)):
+            for variant, X in (("pooled", X_all), ("pooled+weather", X_weather)) if with_models else ():
                 predicted = fit_predict(X[train], ratios, X[test], quantiles, pooled_params)
                 parts.append(frame(variant, *args, from_log_ratio(predicted, level_all[test])))
             print(f"day +{k} {fold} done", file=sys.stderr, flush=True)
@@ -250,13 +267,13 @@ def main() -> None:
             continue
         print(f"\n== {fold}: target days {start:%Y-%m-%d} .. {end:%Y-%m-%d}")
         for k, at_k in f.groupby("k"):
-            g = at_k[at_k.variant == VARIANTS[0]]
+            g = at_k[at_k.variant == variants[0]]
             actual = np.digitize(g.actual.to_numpy(), bounds)
             print(f"  day +{k}: stations {g.station.nunique()}, rows {len(g)}, actual grade shares "
                   + "/".join(f"{np.mean(actual == i):.2f}" for i in range(len(bounds) + 1))
                   + f"; last-24h mean: MAE {np.mean(np.abs(g.persist - g.actual)):.1f}, bias {np.mean(g.persist - g.actual):+.1f}")
             print(grade_line("last-24h mean", actual, np.digitize(g.persist.to_numpy(), bounds), no_go))
-            for variant in VARIANTS:
+            for variant in variants:
                 g = at_k[at_k.variant == variant]
                 values = g[qcols].to_numpy()
                 print(f"    {variant}: MAE {np.mean(np.abs(g[median] - g.actual)):.1f}, bias {np.mean(g[median] - g.actual):+.1f}"
