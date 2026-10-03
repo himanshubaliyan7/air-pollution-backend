@@ -3,6 +3,13 @@
 Read this first in a new chat. It is the complete state of the project: goal, what exists, how it was built, what went wrong, and what to do next. Auto-memory (`MEMORY.md`) holds the same facts in shorter form. **No secrets are in this file.**
 
 ## 0. START HERE: session 10
+**GRADED DAILY VERDICTS ARE LIVE (2026-10-03 ~17:50 UTC = 23:20 IST; main `065c4af`, `forecast.target: daily_mean`).**
+- Owner ran the cutover: migration 0007; `retrain_models.py --apply --target daily_mean` (820 combinations, 2,460 models, 0 failed, 14:22 UTC); `generate_forecasts.py --target daily_mean` (730 forecasts); second deploy after the config switch. `config/` is bind-mounted into the containers, so a config change needs a restart, not an image rebuild.
+- **Public API at 17:57 UTC:** every outlook reports `target: daily_mean`. PM2.5: go 58, caution 16, no-go 3, no-data 5 (77 stations with a verdict; under the hourly rule the day before: no-go 46, go 18). Day categories: good 20, satisfactory 81, moderate 194, poor 76, very_poor 14; highest upper quantile 264. NO2: go at all 69 stations with a forecast. Current AQI at the same time: mostly Moderate, about 17 stations Poor.
+- By design the expected value is nearly flat over the five days (the median ratio is close to 1) and only the upper bound widens: Anand Vihar 60 every day, upper 96 -> 113.
+- **Next:** air-clear PR for the wording (texts still describe the hourly rule; say "estimate"; consider tomorrow's verdict in the banner). Watch the nightly evaluation: it now scores daily forecasts against day means. The weekly retrain (Sunday 00:00 UTC) refits the level ratios; the hourly models are no longer retrained.
+- Still unanswered by the owner: coordinate script (`fix_station_coordinates.py`), Cloudflare token revoked?, phone check, Telegram "resolved".
+
 **Daily-verdict backtest, first run (owner, 2026-10-02 evening; `scripts/daily_verdict_backtest.py` at `5eb1422`): the daily-mean models LOSE to "tomorrow is like the last 24 hours".** Do not switch `forecast.target` to `daily_mean` on this evidence.
 - Onset (target days 2025-10-15..11-30, 64 stations): MAE 73-93 ug/m3 against 51-61 for the last-24h mean; bias -65 to -90; exact grade 0.43 (day +1) to 0.24 (day +5) at p >= 0.3 against 0.61 to 0.50; "too mild" 0.48-0.72 against 0.22-0.32. Only 29 % of days fell below the 90 % quantile.
 - Winter (2026-01-15..03-22, 74 stations): MAE 45-72 against 30-33; bias +31 to +61; exact 0.35-0.24 against 0.59-0.53; "too harsh" 0.59-0.71. 66-74 % of days fell below the 10 % quantile.
