@@ -192,7 +192,7 @@ def test_excluded_features_are_not_trained_on_and_older_models_still_predict(db_
     assert set(excluded) <= features_of_active_models()
     assert predict.forecast(db_session, station_id, Pollutant.PM25, HORIZON_HOURS, as_of, station_lat=lat, station_lon=lon) is not None
 
-    monkeypatch.undo()
+    monkeypatch.setattr(train, "load_model_config", lambda: config)  # not undo(): that also drops the family pin
     ids = train_station_pollutant_horizon(db_session, station_id, Pollutant.PM25, HORIZON_HOURS, as_of_times[0], as_of_times[-1], holdout_days=2)
     for model_id in ids:
         registry.activate_model(db_session, model_id)
