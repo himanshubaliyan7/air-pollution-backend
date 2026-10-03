@@ -19,8 +19,8 @@
     {% endfor %}
   </table>
   <p style="font-size:13px;">
-    <b>Go</b>: no health-threshold exceedance expected. <b>Caution</b>: a real chance of one.
-    <b>No-go</b>: outdoor practice not recommended.
+    <b>Go</b>: {{ legend["go"] }} <b>Caution</b>: {{ legend["caution"] }}
+    <b>No-go</b>: {{ legend["no-go"] }}
     <b>No data</b>: there is no reliable forecast - do not treat it as safe.
   </p>
   <p style="font-size:13px;">Forecasts are estimates and can miss short spikes. <a href="{{ site_url }}">See the full forecast</a>.</p>

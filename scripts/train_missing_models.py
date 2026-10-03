@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
+from common.config import forecast_target
 from common.constants import DEFAULT_HORIZONS_HOURS, ModelType, Pollutant
 from common.logging_conf import configure_logging
 from db.models import ModelRun
@@ -35,11 +36,13 @@ logger = logging.getLogger(__name__)
 
 
 def missing_combinations(session) -> list[tuple]:
-    """(station, pollutant, horizon) for active stations with no active quantile model."""
+    """(station, pollutant, horizon) for active stations with no active quantile
+    model of the family being served."""
     have = set(
         session.execute(
             select(ModelRun.station_id, ModelRun.pollutant, ModelRun.horizon_hours)
-            .where(ModelRun.is_active.is_(True), ModelRun.model_type == ModelType.QUANTILE_REGRESSOR).distinct()
+            .where(ModelRun.is_active.is_(True), ModelRun.model_type == ModelType.QUANTILE_REGRESSOR,
+                   ModelRun.target == forecast_target().value).distinct()
         ).all()
     )
     return [

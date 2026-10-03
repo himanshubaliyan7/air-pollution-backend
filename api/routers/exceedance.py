@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from api.db import get_db
 from api.schemas.forecasts import ExceedanceDayOut, ExceedanceSummaryOut
+from common.config import forecast_target
 from common.constants import Pollutant
 from db.models import Station
 from models.outlook import Outlook, build_outlook
@@ -35,6 +36,7 @@ def summary_out(outlook: Outlook) -> ExceedanceSummaryOut:
         timezone=outlook.timezone,
         forecast_made_at=outlook.forecast_made_at,
         is_current=outlook.is_current,
+        target=forecast_target().value,
         days=[
             ExceedanceDayOut(
                 date=d.date,
@@ -42,6 +44,8 @@ def summary_out(outlook: Outlook) -> ExceedanceSummaryOut:
                 exceedance_probability=d.exceedance_probability,
                 worst_case_value=d.worst_case_value,
                 aqi_category=d.aqi_category,
+                verdict=d.verdict,
+                expected_value=d.expected_value,
             )
             for d in outlook.days
         ],

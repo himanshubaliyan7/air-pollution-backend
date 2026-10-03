@@ -75,6 +75,14 @@ health_threshold_category: poor
 # "no-go". Below the health threshold it is "go".
 no_go_category: very_poor
 
+# The daily-mean family's decision probability: a day gets the worst category
+# its mean reaches with at least this probability. Chosen from
+# scripts/daily_verdict_backtest.py run 4 (2026-10-03): at 0.4 the 2025 onset
+# weeks were graded exactly on 61-52 % of days (tomorrow .. day +5), and 2-5 %
+# of real no-go days were called "go" (0.5: 3-11 %; 0.3: 1-2 % but 37-39 % of
+# days graded too harsh). In late winter 0.4 grades 38-53 % of days too harsh.
+daily_mean_decision_probability: 0.4
+
 # Decision threshold on the model's exceedance_probability (0-1) for setting
 # forecasts.exceedance_flag = true. Recall is weighted over precision here
 # (a missed bad-air day is worse than an extra false alarm) - see

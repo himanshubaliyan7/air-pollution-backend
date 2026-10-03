@@ -2,7 +2,8 @@
 
 No separate model-registry service (MLflow etc.) - model_runs rows are the
 registry; is_active marks which row models/predict.py and forecast_dag load
-for a given (station, pollutant, horizon, model_type[, quantile]). Flipped
+for a given (station, pollutant, horizon, model_type[, quantile]) and target
+(hourly or daily-mean models; each family has its own active set). Flipped
 only by retraining_dag's promote_if_better step, never by hand.
 """
 
@@ -14,18 +15,24 @@ import lightgbm as lgb
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from common.config import get_settings
-from common.constants import ModelType, Pollutant
+from common.config import forecast_target, get_settings
+from common.constants import ForecastTarget, ModelType, Pollutant
 from db.models import ModelRun
 
 logger = logging.getLogger(__name__)
 
 
-def artifact_path(station_id: str, pollutant: Pollutant, horizon_hours: int, model_type: ModelType, trained_at: datetime, quantile: float | None = None) -> str:
+def artifact_path(
+    station_id: str, pollutant: Pollutant, horizon_hours: int, model_type: ModelType, trained_at: datetime,
+    quantile: float | None = None, target: ForecastTarget | None = None,
+) -> str:
     settings = get_settings()
     base = settings.model_artifacts_dir / station_id.replace(":", "_") / pollutant.value / str(horizon_hours) / model_type.value
     base.mkdir(parents=True, exist_ok=True)
     suffix = f"_q{quantile}" if quantile is not None else ""
+    target = target or forecast_target()
+    if target is not ForecastTarget.HOURLY:  # hourly files keep the name they always had
+        suffix += f"_{target.value}"
     filename = f"{trained_at.strftime('%Y%m%dT%H%M%S')}{suffix}.txt"
     return str(base / filename)
 
@@ -54,6 +61,7 @@ def register_model_run(
     hyperparams: dict,
     quantile: float | None = None,
     is_active: bool = False,
+    target: ForecastTarget | None = None,
 ) -> uuid.UUID:
     model_id = uuid.uuid4()
     session.add(
@@ -72,6 +80,7 @@ def register_model_run(
             metrics=metrics,
             hyperparams=hyperparams,
             is_active=is_active,
+            target=(target or forecast_target()).value,
         )
     )
     session.commit()
@@ -87,6 +96,7 @@ def activate_model(session: Session, model_id: uuid.UUID) -> None:
             ModelRun.pollutant == row.pollutant,
             ModelRun.horizon_hours == row.horizon_hours,
             ModelRun.model_type == row.model_type,
+            ModelRun.target == row.target,
             ModelRun.quantile.is_(row.quantile) if row.quantile is None else ModelRun.quantile == row.quantile,
         )
         .values(is_active=False)
@@ -105,6 +115,7 @@ def promote_if_better(
     candidate_model_ids: list[uuid.UUID],
     candidate_f1: float,
     min_improvement: float = 0.0,
+    target: ForecastTarget | None = None,
 ) -> bool:
     """Activates candidate_model_ids (deactivating whatever was previously
     active for this key) only if candidate_f1 beats the currently active
@@ -117,7 +128,7 @@ def promote_if_better(
     Guards against silent regression: a newly retrained model never
     replaces a better-performing incumbent just because it's newer.
     """
-    currently_active = get_active_models(session, station_id, pollutant, horizon_hours, model_type)
+    currently_active = get_active_models(session, station_id, pollutant, horizon_hours, model_type, target)
     active_f1 = None
     for row in currently_active:
         if row.metrics and "f1" in row.metrics:
@@ -146,9 +157,12 @@ def promote_if_better(
 
 
 def get_active_models(
-    session: Session, station_id: str, pollutant: Pollutant, horizon_hours: int, model_type: ModelType
+    session: Session, station_id: str, pollutant: Pollutant, horizon_hours: int, model_type: ModelType,
+    target: ForecastTarget | None = None,
 ) -> list[ModelRun]:
+    """`target` defaults to the family being served (common.config.forecast_target)."""
     stmt = select(ModelRun).where(
+        ModelRun.target == (target or forecast_target()).value,
         ModelRun.station_id == station_id,
         ModelRun.pollutant == pollutant,
         ModelRun.horizon_hours == horizon_hours,

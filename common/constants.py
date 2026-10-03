@@ -38,6 +38,17 @@ class ModelType(str, enum.Enum):
     CLASSIFIER = "classifier"
 
 
+class ForecastTarget(str, enum.Enum):
+    """What a model's `horizon_hours` forecasts (model_runs.target, forecasts.target)."""
+
+    # The value at as_of + horizon_hours: one hour stands in for a whole day.
+    HOURLY = "hourly"
+    # The mean of the station-local calendar day horizon_hours / 24 days after
+    # the day as_of falls in (models/daily.py). The forecast's target_time is
+    # that day's local midnight.
+    DAILY_MEAN = "daily_mean"
+
+
 class AlertStatus(str, enum.Enum):
     SENT = "sent"
     FAILED = "failed"

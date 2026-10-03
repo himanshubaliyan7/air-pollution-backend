@@ -17,12 +17,13 @@ import numpy as np
 import pandas as pd
 from sqlalchemy.orm import Session
 
-from common.config import get_settings, load_yaml_config
-from common.constants import ModelType, Pollutant
-from db.models import ModelRun
+from common.config import forecast_target, get_settings, load_yaml_config
+from common.constants import ForecastTarget, ModelType, Pollutant
+from db.models import ModelRun, Station
 from db.readings import hourly_readings
 from features.feature_store import get_feature_set_version, read_features
-from models import evaluation, exceedance, registry
+from models import evaluation, exceedance, level, registry
+from models.daily import day_ahead_labels, local_day_means, monotone
 from models.lightgbm_pipeline import fit_classifier, fit_point_model, fit_quantile_model, predict, prepare_X
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,13 @@ def _fetch_target_series(session: Session, station_id: str, pollutant: Pollutant
     return pd.Series([v for _, v in rows], index=idx).groupby(level=0).first()
 
 
+def _station_timezone(session: Session, station_id: str) -> str:
+    from models.outlook import station_timezone  # local: outlook pulls in the serving-side modules
+
+    station = session.get(Station, station_id)
+    return station_timezone(station) if station is not None else "UTC"
+
+
 def build_training_matrix(
     session: Session,
     station_id: str,
@@ -54,9 +62,12 @@ def build_training_matrix(
     horizon_hours: int,
     window_start: datetime,
     window_end: datetime,
+    target: ForecastTarget | None = None,
 ) -> tuple[pd.DataFrame, pd.Series]:
     """X = feature vectors already materialized in `features` (batch feature
-    engineering), y = the realized pollutant value at feature_time + horizon.
+    engineering), y = the realized label for `target` (default: the family
+    being served): the pollutant value at feature_time + horizon, or the mean
+    of the local day horizon / 24 days after feature_time's day.
     Rows with no realized label yet (too recent) or incomplete features are
     dropped - this is a supervised-learning matrix, not a serving path, so
     dropping NaNs here is correct (unlike build_feature_frame, which must
@@ -65,22 +76,55 @@ def build_training_matrix(
     if feature_frame.empty:
         return feature_frame, pd.Series(dtype="float64")
 
-    target_start = window_start + timedelta(hours=horizon_hours)
-    target_end = window_end + timedelta(hours=horizon_hours)
-    target_series = _fetch_target_series(session, station_id, pollutant, target_start, target_end)
-
-    label_index = feature_frame.index + pd.Timedelta(hours=horizon_hours)
-    labels = target_series.reindex(label_index)
-    labels.index = feature_frame.index
+    if (target or forecast_target()) is ForecastTarget.DAILY_MEAN:
+        tz_name = _station_timezone(session, station_id)
+        # Two days past the horizon: the label day's own 24 hours, in any time zone.
+        target_series = _fetch_target_series(
+            session, station_id, pollutant, window_start, window_end + timedelta(hours=horizon_hours + 48)
+        )
+        labels = day_ahead_labels(feature_frame.index, local_day_means(target_series, tz_name), tz_name, horizon_hours // 24)
+    else:
+        target_start = window_start + timedelta(hours=horizon_hours)
+        target_end = window_end + timedelta(hours=horizon_hours)
+        target_series = _fetch_target_series(session, station_id, pollutant, target_start, target_end)
+        labels = target_series.reindex(feature_frame.index + pd.Timedelta(hours=horizon_hours)).values
 
     combined = feature_frame.copy()
-    combined["__label__"] = labels.values
+    combined["__label__"] = labels
     combined = combined.dropna()
 
     y = combined.pop("__label__")
     excluded = load_model_config()["training"].get("excluded_features", [])
     X = prepare_X(combined).drop(columns=excluded, errors="ignore")
     return X, y
+
+
+def _train_level(session, station_id, pollutant, horizon_hours, window_start, window_end) -> list:
+    """The daily-mean family (models/level.py): register this station's copy of
+    the pooled ratio quantiles and activate it. Nothing is compared: the rule
+    has no fitted state that a newer fit could make worse."""
+    config = load_model_config()
+    fitted = level.fit_log_ratio_quantiles(session, pollutant, window_start, window_end, sorted(config["quantiles"]))
+    if horizon_hours not in fitted or fitted[horizon_hours][1] < config["training"]["min_training_rows"]:
+        logger.warning("Not enough labelled rows for the %s level ratio at %dh - skipping", pollutant.value, horizon_hours)
+        return []
+    ratios, n_rows = fitted[horizon_hours]
+    trained_at = datetime.now(timezone.utc)
+    ids = []
+    for q, value in ratios.items():
+        model_id = registry.register_model_run(
+            session, station_id=station_id, pollutant=pollutant, horizon_hours=horizon_hours,
+            model_type=ModelType.QUANTILE_REGRESSOR, feature_set_version=get_feature_set_version(),
+            artifact_path=f"{level.KIND}:{pollutant.value}:{horizon_hours}h:q{q}", trained_at=trained_at,
+            training_window_start=window_start, training_window_end=window_end,
+            metrics={"rows": n_rows}, hyperparams={"kind": level.KIND, "log_ratio": value, "pooled": True},
+            quantile=q, target=ForecastTarget.DAILY_MEAN,
+        )
+        registry.activate_model(session, model_id)
+        ids.append(model_id)
+    logger.info("Level %s/%s/%dh: log ratios %s from %d rows", station_id, pollutant.value, horizon_hours,
+                {q: round(v, 3) for q, v in ratios.items()}, n_rows)
+    return ids
 
 
 def train_station_pollutant_horizon(
@@ -91,8 +135,13 @@ def train_station_pollutant_horizon(
     window_start: datetime,
     window_end: datetime,
     holdout_days: int,
+    target: ForecastTarget | None = None,
 ) -> list:
-    """Returns the list of newly-registered (not yet activated) model_run ids."""
+    """Returns the list of newly-registered (not yet activated) model_run ids.
+    `target` defaults to the family being served."""
+    target = target or forecast_target()
+    if target is ForecastTarget.DAILY_MEAN:
+        return _train_level(session, station_id, pollutant, horizon_hours, window_start, window_end)
     config = load_model_config()
     quantiles = config["quantiles"]
     lgbm_cfg = config["lightgbm"]
@@ -100,7 +149,7 @@ def train_station_pollutant_horizon(
 
     holdout_start = window_end - timedelta(days=holdout_days)
 
-    X, y = build_training_matrix(session, station_id, pollutant, horizon_hours, window_start, window_end)
+    X, y = build_training_matrix(session, station_id, pollutant, horizon_hours, window_start, window_end, target)
     if len(X) < min_rows:
         logger.warning(
             "Not enough training rows for %s/%s/%dh (%d < %d) - skipping",
@@ -130,7 +179,9 @@ def train_station_pollutant_horizon(
         quantile_holdout_preds[q] = preds
 
         metrics = {"pinball_loss": evaluation.pinball_loss(y_hold.values, preds, q)}
-        path = registry.artifact_path(station_id, pollutant, horizon_hours, ModelType.QUANTILE_REGRESSOR, trained_at, quantile=q)
+        path = registry.artifact_path(
+            station_id, pollutant, horizon_hours, ModelType.QUANTILE_REGRESSOR, trained_at, quantile=q, target=target
+        )
         registry.save_booster(booster, path)
         model_id = registry.register_model_run(
             session,
@@ -146,6 +197,7 @@ def train_station_pollutant_horizon(
             metrics=metrics,
             hyperparams=lgbm_cfg["quantile"],
             quantile=q,
+            target=target,
         )
         registered_ids.append(model_id)
         quantile_model_ids[q] = model_id
@@ -155,7 +207,7 @@ def train_station_pollutant_horizon(
     quantile_probs = np.array(
         [
             exceedance.probability_from_quantiles(
-                {q: quantile_holdout_preds[q][i] for q in quantiles}, threshold_conc
+                monotone({q: quantile_holdout_preds[q][i] for q in quantiles}), threshold_conc
             )
             for i in range(len(X_hold))
         ]
@@ -181,7 +233,7 @@ def train_station_pollutant_horizon(
     clf_metrics = evaluation.exceedance_classification_metrics(
         y_hold_binary, (clf_probs >= thresholds["exceedance_probability_decision_threshold"]).astype(int)
     )
-    clf_path = registry.artifact_path(station_id, pollutant, horizon_hours, ModelType.CLASSIFIER, trained_at)
+    clf_path = registry.artifact_path(station_id, pollutant, horizon_hours, ModelType.CLASSIFIER, trained_at, target=target)
     registry.save_booster(clf_booster, clf_path)
     clf_model_id = registry.register_model_run(
         session,
@@ -196,12 +248,13 @@ def train_station_pollutant_horizon(
         training_window_end=holdout_start,
         metrics=clf_metrics,
         hyperparams=lgbm_cfg["classifier"],
+        target=target,
     )
     registered_ids.append(clf_model_id)
 
     logger.info(
-        "Trained %s/%s/%dh: quantile-derived f1=%.3f, classifier f1=%.3f (holdout n=%d)",
-        station_id, pollutant.value, horizon_hours,
+        "Trained %s/%s/%dh (%s): quantile-derived f1=%.3f, classifier f1=%.3f (holdout n=%d)",
+        station_id, pollutant.value, horizon_hours, target.value,
         _f1(quantile_exceedance_metrics), _f1(clf_metrics), len(X_hold),
     )
 
@@ -213,6 +266,7 @@ def train_station_pollutant_horizon(
         model_type=ModelType.QUANTILE_REGRESSOR,
         candidate_model_ids=[quantile_model_ids[q] for q in quantiles],
         candidate_f1=_f1(quantile_exceedance_metrics),
+        target=target,
     )
     registry.promote_if_better(
         session,
@@ -222,6 +276,7 @@ def train_station_pollutant_horizon(
         model_type=ModelType.CLASSIFIER,
         candidate_model_ids=[clf_model_id],
         candidate_f1=_f1(clf_metrics),
+        target=target,
     )
 
     return registered_ids

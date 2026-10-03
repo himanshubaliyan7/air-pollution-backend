@@ -11,10 +11,11 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from common.config import get_settings
+from common.config import forecast_target, get_settings
 from common.freshness import floor_hour, is_input_fresh, is_reading_current
 from common.constants import (
     DEFAULT_HORIZONS_HOURS,
+    ForecastTarget,
     MAX_INPUT_STALENESS_HOURS,
     ModelType,
     Pollutant,
@@ -38,6 +39,8 @@ from ingestion.weather.open_meteo_client import OpenMeteoClient
 from alerting.digest import send_daily_digests
 from alerting.retention import purge_subscriptions
 from models import evaluation, exceedance, predict, registry, train
+from models.daily import local_day_means, target_day_start
+from models.outlook import station_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -326,7 +329,10 @@ def forecast_anchor(newest_reading: datetime | None, now: datetime) -> datetime 
     return as_of if is_input_fresh(as_of, now) else None
 
 
-def generate_forecasts() -> dict:
+def generate_forecasts(target: ForecastTarget | None = None) -> dict:
+    """`target` defaults to the family being served. A daily-mean forecast's
+    target_time is the local midnight of the day it is about."""
+    target = target or forecast_target()
     session = get_session()
     try:
         stations = _active_stations(session)
@@ -348,6 +354,7 @@ def generate_forecasts() -> dict:
         skipped_stale = 0
         new_crossings: list[dict] = []
         for station in stations:
+            tz_name = station_timezone(station)
             for pollutant in Pollutant:
                 as_of = forecast_anchor(latest_reading.get((station.station_id, pollutant)), now)
                 if as_of is None:
@@ -357,12 +364,15 @@ def generate_forecasts() -> dict:
                 for horizon in DEFAULT_HORIZONS_HOURS:
                     result = predict.forecast(
                         session, station.station_id, pollutant, horizon, as_of,
-                        station_lat=station.lat, station_lon=station.lon, thresholds=thresholds,
+                        station_lat=station.lat, station_lon=station.lon, thresholds=thresholds, target=target,
                     )
                     if result is None:
                         continue
 
-                    target_time = as_of + timedelta(hours=horizon)
+                    if target is ForecastTarget.DAILY_MEAN:
+                        target_time = target_day_start(as_of, tz_name, horizon // 24)
+                    else:
+                        target_time = as_of + timedelta(hours=horizon)
 
                     was_flagged = session.execute(
                         select(Forecast.exceedance_flag)
@@ -370,6 +380,7 @@ def generate_forecasts() -> dict:
                             Forecast.station_id == station.station_id,
                             Forecast.pollutant == pollutant,
                             Forecast.target_time == target_time,
+                            Forecast.target == target.value,
                         )
                         .order_by(Forecast.forecast_made_at.desc())
                         .limit(1)
@@ -390,6 +401,7 @@ def generate_forecasts() -> dict:
                         "quantile_high": result.quantile_high,
                         "exceedance_probability": result.exceedance_probability,
                         "exceedance_flag": result.exceedance_flag,
+                        "target": target.value,
                     }
                     session.execute(
                         pg_insert(Forecast)
@@ -410,6 +422,7 @@ def generate_forecasts() -> dict:
                             Forecast.pollutant == pollutant,
                             Forecast.forecast_made_at == as_of,
                             Forecast.target_time == target_time,
+                            Forecast.target == target.value,
                             Forecast.model_id != result.model_id,
                         )
                     )
@@ -442,6 +455,24 @@ def generate_forecasts() -> dict:
 
 # ----------------------------------------------------------------- evaluation
 
+def _actuals_for_evaluation(session, station, pollutant, start: datetime, end: datetime, target: ForecastTarget) -> dict:
+    """What a forecast's target_time is compared with: that hour's reading, or
+    for daily-mean forecasts the mean of the local day starting then (only
+    days with enough hours measured: models.daily.MIN_HOURS_PER_DAY)."""
+    readings = hourly_readings(session, station.station_id, pollutant, start, end)
+    if target is not ForecastTarget.DAILY_MEAN or not readings:
+        return dict(readings)
+    import pandas as pd
+
+    tz_name = station_timezone(station)
+    series = pd.Series([v for _, v in readings], index=pd.DatetimeIndex([t for t, _ in readings], tz="UTC"))
+    means = local_day_means(series, tz_name)
+    return {
+        day_start.tz_localize(tz_name).tz_convert("UTC").to_pydatetime(): float(value)
+        for day_start, value in means.items()
+    }
+
+
 def evaluate_recent_forecasts(evaluation_window_days: int = 1) -> int:
     from db.models import ExceedanceEvaluation
 
@@ -451,6 +482,10 @@ def evaluate_recent_forecasts(evaluation_window_days: int = 1) -> int:
         stations = _active_stations(session)
         now = datetime.now(timezone.utc)
         window_start = now - timedelta(days=evaluation_window_days)
+        target = forecast_target()
+        # A daily-mean forecast is scored once its day is over: the days that
+        # ended inside the window, i.e. began a day earlier.
+        day = timedelta(days=1) if target is ForecastTarget.DAILY_MEAN else timedelta(0)
 
         written = 0
         for station in stations:
@@ -463,14 +498,15 @@ def evaluate_recent_forecasts(evaluation_window_days: int = 1) -> int:
                             Forecast.station_id == station.station_id,
                             Forecast.pollutant == pollutant,
                             Forecast.horizon_hours == horizon,
-                            Forecast.target_time >= window_start,
-                            Forecast.target_time <= now,
+                            Forecast.target == target.value,
+                            Forecast.target_time >= window_start - day,
+                            Forecast.target_time <= now - day,
                         )
                     ).scalars().all()
                     if not forecast_rows:
                         continue
 
-                    actual_by_time = dict(hourly_readings(session, station.station_id, pollutant, window_start, now))
+                    actual_by_time = _actuals_for_evaluation(session, station, pollutant, window_start - day, now, target)
 
                     paired = [
                         (actual_by_time[r.target_time], r.point_forecast, r.exceedance_flag)

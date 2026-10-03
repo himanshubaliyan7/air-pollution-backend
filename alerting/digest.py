@@ -23,9 +23,10 @@ from sqlalchemy.orm import Session
 
 from alerting.mailer import build_message, send_message
 from alerting.tokens import make_unsubscribe_token, one_click_unsubscribe_url, unsubscribe_page_link
-from common.config import REPO_ROOT, get_settings
-from common.constants import AlertStatus, Pollutant
+from common.config import REPO_ROOT, forecast_target, get_settings
+from common.constants import AlertStatus, ForecastTarget, Pollutant
 from db.models import AlertSubscription, DigestLog, Station
+from models.exceedance import load_thresholds
 from models.outlook import Outlook, build_outlook, station_timezone
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,24 @@ class DigestRow:
     pollutant: str  # display form, e.g. "PM2.5"
     verdicts: list[str]  # one per day shown
     data_as_of: str | None  # local time of the newest reading behind the forecast
+
+
+def _legend() -> dict[str, str]:
+    """What each verdict means, for the model family being served."""
+    if forecast_target() is not ForecastTarget.DAILY_MEAN:
+        return {
+            "go": "no health-threshold exceedance expected.",
+            "caution": "a real chance of one.",
+            "no-go": "outdoor practice not recommended.",
+        }
+    thresholds = load_thresholds()
+    name = lambda key: thresholds[key].replace("_", " ").title()  # noqa: E731
+    return {
+        "go": f"the day's average is expected to stay below {name('health_threshold_category')}.",
+        "caution": f"the day's average is expected to be {name('health_threshold_category')}.",
+        "no-go": f"the day's average is expected to be {name('no_go_category')} or worse; "
+                 "outdoor practice not recommended.",
+    }
 
 
 def _pollutant_label(p: str) -> str:
@@ -117,6 +136,7 @@ def send_daily_digests(session: Session, now: datetime) -> dict[str, int]:
             day_labels=[d.strftime("%a %d %b") for d in days],
             rows=rows,
             labels=_LABEL,
+            legend=_legend(),
             site_url=base,
             manage_request_url=f"{base}/subscribe",
             unsubscribe_url=unsubscribe_page_link(token, settings),

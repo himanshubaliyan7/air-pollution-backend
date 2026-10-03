@@ -1025,6 +1025,28 @@
           "aqi_category": {
             "type": "string",
             "title": "Aqi Category"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict"
+          },
+          "expected_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Value"
           }
         },
         "type": "object",
@@ -1035,7 +1057,8 @@
           "worst_case_value",
           "aqi_category"
         ],
-        "title": "ExceedanceDayOut"
+        "title": "ExceedanceDayOut",
+        "description": "One calendar day. What the values describe depends on the summary's `target`.\n\n\"daily_mean\" (graded verdicts, owner decision 2026-10-02): everything is about the day's\nMEAN concentration. aqi_category is the worst category that mean reaches with the service's\ndecision probability, and verdict follows from it: go below the region's health-threshold\ncategory, caution in it, no-go from the next one up.\n\n\"hourly\": the day is represented by ONE forecast hour (the run's anchor hour + N x 24 h).\nexceedance_flag is true when that hour is likely above the health threshold, and\naqi_category is the category of its upper quantile."
       },
       "ExceedanceSummaryOut": {
         "properties": {
@@ -1074,6 +1097,11 @@
             "type": "boolean",
             "title": "Is Current",
             "default": false
+          },
+          "target": {
+            "type": "string",
+            "title": "Target",
+            "default": "hourly"
           },
           "days": {
             "items": {
@@ -1178,6 +1206,11 @@
             "title": "Is Current",
             "default": false
           },
+          "target": {
+            "type": "string",
+            "title": "Target",
+            "default": "hourly"
+          },
           "forecasts": {
             "items": {
               "$ref": "#/components/schemas/ForecastPointOut"
@@ -1228,6 +1261,11 @@
               }
             ],
             "title": "Timezone"
+          },
+          "target": {
+            "type": "string",
+            "title": "Target",
+            "default": "hourly"
           },
           "points": {
             "items": {

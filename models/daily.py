@@ -8,6 +8,9 @@ pure parts shared by training, serving and the backtest: the labels, and the
 rule that turns a day's quantile forecasts into a category and a verdict.
 """
 
+from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
+
 import numpy as np
 import pandas as pd
 
@@ -43,6 +46,14 @@ def day_ahead_labels(as_of: pd.DatetimeIndex, day_means: pd.Series, tz_name: str
     return day_means.reindex(target_days).to_numpy(dtype="float64")
 
 
+def target_day_start(as_of: datetime, tz_name: str, days_ahead: int) -> datetime:
+    """Local midnight (as UTC) of the day `days_ahead` days after the one
+    `as_of` falls in: the target_time of a daily-mean forecast."""
+    zone = ZoneInfo(tz_name)
+    day = as_of.astimezone(zone).date() + timedelta(days=days_ahead)
+    return datetime.combine(day, time.min, tzinfo=zone).astimezone(timezone.utc)
+
+
 def monotone(quantile_predictions: dict[float, float]) -> dict[float, float]:
     """Separately fitted quantile models can cross (the 0.9 model below the 0.5
     one). Sorting the values restores a valid distribution; the interpolation
@@ -54,8 +65,8 @@ def monotone(quantile_predictions: dict[float, float]) -> dict[float, float]:
 
 def category_for_day(quantile_predictions: dict[float, float], thresholds: dict, pollutant: Pollutant) -> str:
     """The worst category the day's mean reaches with at least the configured
-    probability (thresholds["exceedance_probability_decision_threshold"])."""
-    decision = thresholds["exceedance_probability_decision_threshold"]
+    probability (thresholds["daily_mean_decision_probability"])."""
+    decision = thresholds["daily_mean_decision_probability"]
     quantile_predictions = monotone(quantile_predictions)
     breakpoints = thresholds["pollutants"][pollutant.value]["breakpoints"]
     category = breakpoints[0]["category"]
