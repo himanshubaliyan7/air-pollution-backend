@@ -22,7 +22,7 @@ from common.constants import ForecastTarget, ModelType, Pollutant
 from db.models import ModelRun, Station
 from db.readings import hourly_readings
 from features.feature_store import get_feature_set_version, read_features
-from models import evaluation, exceedance, registry
+from models import evaluation, exceedance, level, registry
 from models.daily import day_ahead_labels, local_day_means, monotone
 from models.lightgbm_pipeline import fit_classifier, fit_point_model, fit_quantile_model, predict, prepare_X
 
@@ -99,6 +99,34 @@ def build_training_matrix(
     return X, y
 
 
+def _train_level(session, station_id, pollutant, horizon_hours, window_start, window_end) -> list:
+    """The daily-mean family (models/level.py): register this station's copy of
+    the pooled ratio quantiles and activate it. Nothing is compared: the rule
+    has no fitted state that a newer fit could make worse."""
+    config = load_model_config()
+    fitted = level.fit_log_ratio_quantiles(session, pollutant, window_start, window_end, sorted(config["quantiles"]))
+    if horizon_hours not in fitted or fitted[horizon_hours][1] < config["training"]["min_training_rows"]:
+        logger.warning("Not enough labelled rows for the %s level ratio at %dh - skipping", pollutant.value, horizon_hours)
+        return []
+    ratios, n_rows = fitted[horizon_hours]
+    trained_at = datetime.now(timezone.utc)
+    ids = []
+    for q, value in ratios.items():
+        model_id = registry.register_model_run(
+            session, station_id=station_id, pollutant=pollutant, horizon_hours=horizon_hours,
+            model_type=ModelType.QUANTILE_REGRESSOR, feature_set_version=get_feature_set_version(),
+            artifact_path=f"{level.KIND}:{pollutant.value}:{horizon_hours}h:q{q}", trained_at=trained_at,
+            training_window_start=window_start, training_window_end=window_end,
+            metrics={"rows": n_rows}, hyperparams={"kind": level.KIND, "log_ratio": value, "pooled": True},
+            quantile=q, target=ForecastTarget.DAILY_MEAN,
+        )
+        registry.activate_model(session, model_id)
+        ids.append(model_id)
+    logger.info("Level %s/%s/%dh: log ratios %s from %d rows", station_id, pollutant.value, horizon_hours,
+                {q: round(v, 3) for q, v in ratios.items()}, n_rows)
+    return ids
+
+
 def train_station_pollutant_horizon(
     session: Session,
     station_id: str,
@@ -112,6 +140,8 @@ def train_station_pollutant_horizon(
     """Returns the list of newly-registered (not yet activated) model_run ids.
     `target` defaults to the family being served."""
     target = target or forecast_target()
+    if target is ForecastTarget.DAILY_MEAN:
+        return _train_level(session, station_id, pollutant, horizon_hours, window_start, window_end)
     config = load_model_config()
     quantiles = config["quantiles"]
     lgbm_cfg = config["lightgbm"]

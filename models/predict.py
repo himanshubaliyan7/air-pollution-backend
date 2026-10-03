@@ -13,6 +13,8 @@ of which model_type produced them.
 
 import logging
 from dataclasses import dataclass
+
+import pandas as pd
 from datetime import datetime
 
 from sqlalchemy.orm import Session
@@ -21,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 from common.constants import ForecastTarget, ModelType, Pollutant
 from features.build_features import build_feature_frame
-from models import exceedance, registry
+from models import exceedance, level, registry
 from models.daily import monotone
 from models.lightgbm_pipeline import predict as lgbm_predict
 from models.lightgbm_pipeline import prepare_X
@@ -67,6 +69,15 @@ def forecast(
         return None  # cold-start station, nothing to predict from
 
     X = prepare_X(feature_frame)
+    if all(level.is_level_model(row) for row in quantile_models):
+        # Daily-mean family: the rule needs only the last-24h mean.
+        current = X[level.LEVEL_FEATURE].iloc[0] if level.LEVEL_FEATURE in X else float("nan")
+        if pd.isna(current):
+            return None
+        quantile_preds = level.forecast_values(float(current), {r.quantile: r.hyperparams["log_ratio"] for r in quantile_models})
+        median_model_id = next((r.model_id for r in quantile_models if r.quantile == 0.5), None)
+        return _result(quantile_preds, median_model_id or quantile_models[0].model_id, threshold_conc,
+                       thresholds["daily_mean_decision_probability"], thresholds)
     if X.isna().any(axis=None):
         return None  # incomplete lag history for this as_of_time
 
@@ -93,13 +104,16 @@ def forecast(
 
     if not quantile_preds:
         return None
-    quantile_preds = monotone(quantile_preds)  # separately fitted quantiles can cross
+    return _result(quantile_preds, median_model_id or quantile_models[0].model_id, threshold_conc, None, thresholds)
 
+
+def _result(quantile_preds, model_id, threshold_conc, decision, thresholds) -> ForecastResult:
+    quantile_preds = monotone(quantile_preds)  # separately fitted quantiles can cross
     probability = exceedance.probability_from_quantiles(quantile_preds, threshold_conc)
-    flag = exceedance.classify_exceedance(probability, thresholds=thresholds)
+    flag = exceedance.classify_exceedance(probability, decision, thresholds=thresholds)
 
     return ForecastResult(
-        model_id=median_model_id or quantile_models[0].model_id,
+        model_id=model_id,
         point_forecast=quantile_preds.get(0.5, sorted(quantile_preds.values())[len(quantile_preds) // 2]),
         quantile_low=min(quantile_preds.values()),
         quantile_high=max(quantile_preds.values()),

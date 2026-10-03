@@ -54,7 +54,7 @@ def test_crossed_quantiles_are_put_back_in_order():
     ({0.1: 300.0, 0.5: 180.0, 0.9: 240.0}, 0.5, "very_poor"),  # crossed quantiles
 ])
 def test_category_is_the_worst_one_reached_with_the_decision_probability(quantiles, decision, category):
-    thresholds = {**load_thresholds(), "exceedance_probability_decision_threshold": decision}
+    thresholds = {**load_thresholds(), "daily_mean_decision_probability": decision}
     assert category_for_day(quantiles, thresholds, Pollutant.PM25) == category
 
 

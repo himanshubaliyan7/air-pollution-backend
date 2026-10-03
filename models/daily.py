@@ -65,8 +65,8 @@ def monotone(quantile_predictions: dict[float, float]) -> dict[float, float]:
 
 def category_for_day(quantile_predictions: dict[float, float], thresholds: dict, pollutant: Pollutant) -> str:
     """The worst category the day's mean reaches with at least the configured
-    probability (thresholds["exceedance_probability_decision_threshold"])."""
-    decision = thresholds["exceedance_probability_decision_threshold"]
+    probability (thresholds["daily_mean_decision_probability"])."""
+    decision = thresholds["daily_mean_decision_probability"]
     quantile_predictions = monotone(quantile_predictions)
     breakpoints = thresholds["pollutants"][pollutant.value]["breakpoints"]
     category = breakpoints[0]["category"]

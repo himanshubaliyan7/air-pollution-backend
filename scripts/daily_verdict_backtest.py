@@ -248,7 +248,7 @@ def main() -> None:
     median = qcols[quantiles.index(0.5)]
 
     # The vectorised rule must be the production rule.
-    thresholds_at = lambda d: {**thresholds, "exceedance_probability_decision_threshold": d}  # noqa: E731
+    thresholds_at = lambda d: {**thresholds, "daily_mean_decision_probability": d}  # noqa: E731
     sample = df.sample(min(300, len(df)), random_state=0)
     for decision in DECISIONS:
         fast = grades(sample[qcols].to_numpy(), quantiles, bounds, decision)

@@ -39,7 +39,8 @@ def _train_all(db, monkeypatch, tmp_path, level):
 def test_models_learn_the_days_mean_and_stay_apart_from_the_hourly_family(db_session, monkeypatch, tmp_path, daily_target):
     station_id, lat, lon = _train_all(db_session, monkeypatch, tmp_path, level=80.0)
 
-    assert {r.target for r in db_session.query(ModelRun).all()} == {DAILY}
+    runs = db_session.query(ModelRun).all()
+    assert {r.target for r in runs} == {DAILY} and {r.hyperparams["kind"] for r in runs} == {"level_ratio"}
     assert registry.get_active_models(db_session, station_id, Pollutant.PM25, 24, ModelType.QUANTILE_REGRESSOR)
     assert registry.get_active_models(
         db_session, station_id, Pollutant.PM25, 24, ModelType.QUANTILE_REGRESSOR, ForecastTarget.HOURLY) == []
@@ -241,8 +242,9 @@ def test_switch_rehearsal_train_and_forecast_the_daily_family_while_the_hourly_o
     hourly = retrain_models.retrain(db_session, True, [Pollutant.PM25], None, now=now)
     daily = retrain_models.retrain(db_session, True, [Pollutant.PM25], None, now=now, target=ForecastTarget.DAILY_MEAN)
     n = len(DEFAULT_HORIZONS_HOURS)
-    assert hourly["activated"] == daily["activated"] == 4 * n  # neither run deactivated the other family's models
-    assert db_session.query(ModelRun).filter_by(is_active=True).count() == 8 * n
+    # Hourly: three quantile models and a classifier per horizon; daily: the three level ratios.
+    assert (hourly["activated"], daily["activated"]) == (4 * n, 3 * n)
+    assert db_session.query(ModelRun).filter_by(is_active=True).count() == 7 * n  # neither run touched the other family
 
     assert tasks.generate_forecasts()["forecasts_written"] == n
     assert tasks.generate_forecasts(ForecastTarget.DAILY_MEAN)["forecasts_written"] == n
