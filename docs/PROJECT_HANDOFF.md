@@ -1,8 +1,65 @@
-# Project handoff (written 2026-09-22; rewritten 2026-09-25, end of session 5; updated 2026-09-30, end of session 8; updated 2026-10-01, end of session 9)
+# Project handoff (written 2026-09-22; rewritten 2026-09-25, end of session 5; updated 2026-09-30, end of session 8; updated 2026-10-01, end of session 9; updated 2026-10-04, end of session 10)
 
 Read this first in a new chat. It is the complete state of the project: goal, what exists, how it was built, what went wrong, and what to do next. Auto-memory (`MEMORY.md`) holds the same facts in shorter form. **No secrets are in this file.**
 
-## 0. START HERE: session 10
+## 0. START HERE: session 11
+**State at the end of session 10 (2026-10-04 IST; last API check 2026-10-03 17:57 UTC = 23:27 IST).** Session 10 ran over two days and changed what the product says: three faults in the forecasts were found and fixed, and the verdict is now graded by the day's mean. The step-by-step record is in section 0a ("Session 10 details").
+
+**What is live:**
+- **Backend: main `065c4af` is deployed** (later commits are handoff only). Migration 0007 has run. `config/settings.yaml forecast.target` is **`daily_mean`**.
+- **Verdicts are graded by the day's mean (owner decisions 2026-10-02 and 2026-10-03).** For each of the next five local days: the expected mean = the station's last-24h mean x a ratio; the day's category = the worst CPCB category that mean reaches with probability >= 0.4; the verdict = go below Poor (< 91 ug/m3 PM2.5), caution for Poor, no-go from Very Poor. The ratios (10 / 50 / 90 % quantiles of day mean / last-24h mean) are fitted on all stations together: `models/level.py`. No per-station model is involved.
+- **Public API, 2026-10-03 17:57 UTC:** PM2.5 go 58, caution 16, no-go 3, no-data 5 (77 stations with a verdict). NO2 go at all 69 stations with a forecast. Current AQI at that time: mostly Moderate, about 17 stations Poor. Three days earlier, under the hourly rule: no-go at 64 of 68.
+- **The hourly model family still exists** (models active, `target = hourly` rows) but is no longer served, forecast or retrained. It is the rollback: set `forecast.target: hourly`, push, restart the containers.
+- **Frontend:** air-clear `main` = `a26c652`, unchanged in session 10. It shows the new categories and verdicts correctly (the API fields kept their names), but its texts still describe the hourly rule.
+- Tests: backend 226 pass (one known failure still deselected). They need the local test database: section 7.
+
+**Three faults fixed in session 10 (all deployed and verified on the public API):**
+1. **Sensor faults were training data.** OpenAQ held PM2.5 readings of exactly 10,000 ug/m3 at six stations and one of 2,938,322; Shadipur's forecast reached 8,243. Fix: `common.constants.PLAUSIBLE_RANGE` (PM2.5 0-2,000, NO2 0-500), applied in `db/readings.py::hourly_readings` for every consumer. Raw rows are kept.
+2. **Calendar features identified last year's dates.** With one year of history, `doy_sin`, `doy_cos`, `is_stubble_season` and `is_diwali_window` made the models repeat last October: forecasts tripled on 2026-10-01. Fix: `training.excluded_features` in `models/config/model_config.yaml`. Give them back only with several years of history.
+3. **The verdict rule itself:** one forecast hour above 91 called nearly every day no-go. Replaced by the graded daily verdict above.
+
+**What the backtests say about accuracy (do not promise more than this):**
+- `scripts/daily_verdict_backtest.py`, four owner runs, two test windows (2025-10-15..11-30 onset, 2026-01-15..03-22 late winter). At p >= 0.4 the grade is exact on 61 % of days for tomorrow and 52 % for day +5 at the onset; 50 % and 38 % in late winter, where 38-53 % of days are graded too harsh. Real no-go days called "go": 2-5 % at the onset, 7-16 % in late winter.
+- Nothing beat the last-24h mean: per-station LightGBM was worse, one LightGBM model for all stations was level with it, and even the target day's actual wind and humidity added only a few points in winter.
+- The rule follows about a day behind. It will not anticipate a sudden change (Diwali night, first stubble smoke).
+
+**Owner steps still open (asked several times in session 10, never answered):**
+1. `scripts/fix_station_coordinates.py`: the code is deployed (since `fa3c93d`), the script was not run. Commands: section 0a, "Session 9 end state", owner step 1 (skip the deploy line).
+2. Revoke the Cloudflare API token that was pasted into the session-9 chat.
+3. Try the dashboard on a real phone.
+4. Did Telegram show `forecast-coverage-low` "resolved"? Does the 18:00 IST digest arrive, and does its legend now explain the daily verdicts?
+
+**First checks in session 11:**
+1. `curl -s https://air-api.himanshubaliyan.dev/api/v1/overview`: every outlook has `target: daily_mean`; count `overall_recommendation`; compare with 58 / 16 / 3 / 5 above and with current AQI.
+2. **The weekly retrain ran Sunday 2026-10-04 00:00 UTC for the first time with the daily family.** It should have refitted the level ratios (one pooled fit per pollutant, then rows per station) and left the hourly models alone. Ask the owner for the `retraining_dag` state or check that verdicts are still served.
+3. **The nightly evaluation now scores daily forecasts against day means** (`evaluate_recent_forecasts`). The first full day it could score was 2026-10-04 IST. Check `/api/v1/model-health` for rows that make sense, and that the drift alarm did not fire on Telegram.
+4. Nine stations had no PM2.5 forecast on 2026-10-02 for unknown reasons (Alipur, Sector 11 Faridabad, Sector 125 Noida, Knowledge Park III, Major Dhyan Chand Stadium, New Industrial Town, Wave City, MD University Rohtak, Ved Vihar-Loni). The daily rule needs only the last-24h mean, and no-data fell to 5: see which remain and run `scripts/coverage_diagnosis.py` if needed.
+5. All API paths start with `/api/v1`.
+
+**Next work, in the order I would take it:**
+- **air-clear PR for the wording.** The texts still describe the hourly rule ("chance of exceeding", "worst case"). Call the outlook an estimate. Use the new API fields: `days[].verdict`, `days[].expected_value`, `target` on the summary, series and history responses. Proposed to the owner, not yet answered: show tomorrow's verdict in the banner instead of the worst of five days. The forecast-detail page now receives day means (one point per day, `target_time` = local midnight) and history shows the last forecast made before each day against that day's hours: check both charts.
+- **Watch the first days of live daily verdicts** against what was measured (first checks 2 and 3).
+- **Go-live step 9** (was due ~2026-10-03): drop sslip from `CADDY_SITE_ADDRESS` and workers.dev from CORS.
+- Then the rest of Phase 6 below.
+
+**Phase 6 "winter readiness" status (target ~2026-10-18; the plan as written is in section 0a and 5a):**
+- **A. Close P0:** coverage target met (77 PM2.5 stations). Still open: rerun `scripts/cpcb_subindex_study.py` for the NO2 unit proof.
+- **B. Owner decision:** DONE (graded verdicts on the day's mean).
+- **C. Daily targets:** DONE differently from the plan: the model-free level rule, not daily LightGBM models. "Robust holdout" is moot for the served family (it has no holdout); it still applies to the hourly family if that is ever served again.
+- **D. Threshold and wild-quantile guard:** DONE for the cause (plausibility filter, excluded features); the daily family has its own `daily_mean_decision_probability: 0.4`. Revisit it with live evaluation data in November: late winter was over-warned at 0.4.
+- **E. Operations:** open (go-live step 9; Telegram alert when a digest fails or sends 0 emails; cleanup of worktrees and `airpollution_{sub,qa,dba,ops}_test`; the deselected integration test).
+- **F. UI:** dashboard live since session 9; wording PR open (above).
+- **Ideas not started:** a per-station spike rule for faults below the plausibility limits (Teri Gram sticks at exactly 1,000); weather-forecast features (best case measured: a few points in winter); a "today" verdict.
+
+## 0a. Earlier session results (kept for history)
+### Session 10 details (2026-10-02 to 2026-10-04)
+Kept in the order it was written, newest block first. Section 0 holds the summary.
+**Fourth backtest run and the cutover (2026-10-03):**
+- Run 4 (`level` only, script at `4f625e3`): p >= 0.3 / 0.4 / 0.5 at the onset, day +1: exact 0.57 / 0.61 / 0.61, too mild 0.07 / 0.12 / 0.22, too harsh 0.37 / 0.27 / 0.17, real no-go days called go 0.01 / 0.02 / 0.03 (day +5: 0.02 / 0.05 / 0.11). Late winter, day +1: exact 0.42 / 0.50 / 0.58, too harsh 0.50 / 0.38 / 0.24, no-go days called go 0.08 / 0.12 / 0.18. Chosen: 0.4.
+- Owner approved the model-free rule. Built `models/level.py` (`3b97cba` merged `feat/daily-verdicts` into main), then `0bdce5e` switched `forecast.target` to `daily_mean` and `065c4af` fixed a test that the switch exposed.
+- The blocks below were written while this was in progress: where they say PENDING, "awaiting the owner" or "not merged", the outcome is in this block and in section 0.
+
+
 **GRADED DAILY VERDICTS ARE LIVE (2026-10-03 ~17:50 UTC = 23:20 IST; main `065c4af`, `forecast.target: daily_mean`).**
 - Owner ran the cutover: migration 0007; `retrain_models.py --apply --target daily_mean` (820 combinations, 2,460 models, 0 failed, 14:22 UTC); `generate_forecasts.py --target daily_mean` (730 forecasts); second deploy after the config switch. `config/` is bind-mounted into the containers, so a config change needs a restart, not an image rebuild.
 - **Public API at 17:57 UTC:** every outlook reports `target: daily_mean`. PM2.5: go 58, caution 16, no-go 3, no-data 5 (77 stations with a verdict; under the hourly rule the day before: no-go 46, go 18). Day categories: good 20, satisfactory 81, moderate 194, poor 76, very_poor 14; highest upper quantile 264. NO2: go at all 69 stations with a forecast. Current AQI at the same time: mostly Moderate, about 17 stations Poor.
@@ -65,6 +122,8 @@ Read this first in a new chat. It is the complete state of the project: goal, wh
   - A cap at serving time was rejected: it would hide the number but leave the verdict wrong (Shadipur's probability is 0.9 because its median model is wrong).
 - **Forecasts still lean high everywhere.** Median upper quantile 145-173 ug/m3 and 50-58 of 67 stations flagged on each day, while current AQI is Moderate at 47 stations, Poor at 16, Satisfactory at 4. Where a past forecast can be compared: Shadipur median forecast 95 vs 32 observed, NSIT Dwarka 114 vs 25, Sri Aurobindo Marg 77 vs 55. Mandir Marg and Najafgarh (models from `train_missing_models.py`) look like their neighbours: high but not wild.
 
+### Session 9 end state (2026-10-01; superseded by section 0)
+
 **State at the end of session 9 (2026-10-01 17:20 UTC = 22:50 IST).** Session 9 was long: checks, coverage fixes, a globe that was built and then dropped, and a new dashboard. The details are in section 0a ("Session 9 details").
 
 **What is live:**
@@ -102,6 +161,8 @@ Read this first in a new chat. It is the complete state of the project: goal, wh
 - Owner feedback on the dashboard (phone), then small fixes.
 - Decision B, then item C (daily targets, robust holdout) and item D (threshold and the wild-quantile guard). These decide what the dashboard's "Next days" tile says through the winter.
 - ~2026-10-03: go-live step 9 (item E).
+
+### Phase 6 plan as written at the end of session 9 (status: section 0)
 
 **Plan (Phase 6 "winter readiness", target ~2026-10-18; details in section 5a):**
 - **A. Close P0.**
@@ -141,7 +202,6 @@ Read this first in a new chat. It is the complete state of the project: goal, wh
   - Local run: `DEV_API_PROXY=https://air-api.himanshubaliyan.dev VITE_API_BASE_URL=http://localhost:5199 npx vite dev --port 5199`.
   - `bun.lock` is not updated (no bun on the owner's PC); `package-lock.json` must never be committed. The owner's own clone is `D:\Desktopir-clear`; deploy from there (section 7).
 
-## 0a. Earlier session results (kept for history)
 ### Session 9 details (2026-10-01)
 **Session 9 check results (public API, 2026-10-01 11:52 UTC):**
 - **The CPCB fallback works.** PM2.5 verdicts at **52 stations** (48 no-go, 4 go), up from 7. NO2 at **43** (41 go, 2 no-go), up from 0. Most forecasts were made from an hour less than 3 h old. API `/health` ok; 67 stations have current AQI.
@@ -201,6 +261,8 @@ Read this first in a new chat. It is the complete state of the project: goal, wh
 A production-style service that tells **Delhi NCR schools whether outdoor practice is safe**, built to grow to other cities/countries later. Two signals per monitoring station: (a) **air quality right now**: official CPCB readings; (b) a **multi-day outlook**: hourly PM2.5/NO2 forecasts turned into go / caution / no-go / no-data. Hard product rule: **`no-data` (missing, stale or incomplete forecast) must never read as "go"**: a school could treat silence as clearance. The frontend is built by **Lovable** (now dormant, see section 6); the backend is ours.
 
 ## 2. What exists NOW (2026-09-25)
+**Changed since this section was written (read section 0 first):** verdicts come from the daily-mean family (`models/level.py`, `models/daily.py`, `forecast.target` in `config/settings.yaml`), not from hourly LightGBM models; `model_runs.target` and `forecasts.target` (migration 0007) separate the two families; implausible readings are filtered on read (`PLAUSIBLE_RANGE`); the live site is https://air.himanshubaliyan.dev with the API at https://air-api.himanshubaliyan.dev; 82 active stations; 226 backend tests. New scripts: `reading_outlier_diagnosis.py`, `retrain_models.py`, `generate_forecasts.py`, `daily_verdict_backtest.py`.
+
 - **Backend repo**: `D:\Desktop\New_Project`, branch `main`, private GitHub `https://github.com/himanshubaliyan7/air-pollution-backend`. `ingestion/` (OpenAQ, ERA5, Open-Meteo, CPCB CAAQMS feed + data.gov.in fallback), `features/`, `models/` (LightGBM per station/pollutant/horizon), `api/` (FastAPI), `orchestration/` (Airflow 2.9.3 DAGs), `alerting/`, `db/` (SQLAlchemy 1.4-style + Alembic, Postgres/TimescaleDB), `config/`, `docker/` (compose + prod override + Caddyfile), `scripts/` (backup/restore/setup, backfills, backtests), `tests/` (168, all green), `docs/`.
 - **LIVE deployment: Oracle Cloud (Always Free), not the owner's PC.** `https://137-23-49-72.sslip.io`. Instance `air-pollution-backend`, `ap-mumbai-1`, `VM.Standard.A1.Flex` (ARM, 4 OCPU/24GB), reserved public IP `137.23.49.72`, Ubuntu 24.04 Minimal aarch64. SSH: `ssh air-pollution-backend` (alias in `~/.ssh/config` on the owner's machine, also usable from any Claude session with that config present) or `ssh ubuntu@137.23.49.72` — the owner's own key (`~/.ssh/id_ed25519`) is authorized directly on the server, independent of any Claude session. Stack: `postgres` (TimescaleDB), `airflow-scheduler`/`airflow-webserver`, `api`, `caddy` (TLS + reverse proxy, HTTP/1.1+2 only — HTTP/3 deliberately disabled). All containers `restart: unless-stopped`/`on-failure` and **reboot-tested** to come back on their own.
 - **DAGs: 8 running on schedule** (UTC): `ingestion_dag` :10, `feature_engineering_dag` :30, `current_aqi_dag` :40, `forecast_dag` :45, `watchdog_dag` :55 (Telegram + healthchecks.io, both live), `evaluation_monitoring_dag` daily 00:00, `retraining_dag` weekly (Sun 00:00), `station_maintenance_dag` daily 02:30 (station activity + subscriber-data retention purge). **`alert_digest_dag` (daily 12:30 UTC = 18:00 IST) is deployed but PAUSED** until the Phase 4 go-live.
@@ -234,8 +296,14 @@ A production-style service that tells **Delhi NCR schools whether outdoor practi
    - found and fixed the NO2 unit bug (data, code, models);
    - built and deployed the CPCB fallback input.
 8. **Session 9** (2026-10-01): ran the checks; fixed the CPCB station matching and the 6 h feature refresh window; found why 15 stations had no PM2.5 model and trained the missing models (PM2.5 coverage 7 -> 68, NO2 0 -> 58); built `GET /overview`; built, deployed and then dropped a 3D globe; replaced it with a station dashboard and an optional Leaflet map (live); wrote the coordinate fix (not yet run).
+9. **Session 10** (2026-10-02 to 10-04): found sensor-fault readings in the training data (forecasts up to 8,243 ug/m3) and added a plausibility filter; found that the calendar features made the models repeat last October and excluded them; the owner chose graded verdicts on the day's mean; built a second, daily-mean model family next to the hourly one (migration 0007, switchable by config); four backtest runs showed no model beats the last-24h mean, so the daily family became a model-free rule; cut over with no gap. PM2.5 no-go went from 64 of 68 stations to 3 of 77.
 
 ## 4. Key design decisions and why
+- **Verdicts are graded by the day's mean (owner, 2026-10-02), from a model-free rule (owner, 2026-10-03).** Why the day's mean: CPCB's categories are defined on 24-hour averages, and the hourly rule called 64 of 68 stations no-go while the air was Moderate. Why no model: four backtest runs found nothing that beats "the next days look like the last 24 hours"; the rule is as exact, better calibrated, and cannot learn sensor faults or calendar dates. Why 0.4: it halves the real no-go days called "go" at the onset compared with 0.5 and keeps tomorrow's exact rate. Cost accepted: over-warning in late winter, and a rule that lags sudden changes by about a day.
+- **Two model families, one served.** `target` on `model_runs` and `forecasts` keeps hourly and daily-mean rows apart; every query filters on `common.config.forecast_target()`. A family is trained and forecast before it is served (`retrain_models.py --target`, `generate_forecasts.py --target`), so a switch shows no gap, and switching back is one config line.
+- **Implausible readings are dropped on read, not on write** (`db/readings.py::hourly_readings`): one rule for features, labels, evaluation and the history chart, and the raw rows stay for diagnosis. The limits sit above the real Diwali-night peaks (1,750-1,900 ug/m3 PM2.5).
+- **Features that identify a date are not given to models** (`training.excluded_features`) while the history is one year long.
+- **The bullet below on the hourly no-go rule is superseded**; it describes the family that is kept for rollback.
 - Forecast models use hourly ug/m3 history only. The CPCB feed is **AQI sub-indices**. Until 2026-10-01 it powered current conditions only.
   - **Since Phase 6 P0 step 3:** its `Hourly_sub_index` for PM2.5/NO2 is inverted through the CPCB breakpoints and stored as readings with source `CPCB` (`ingestion/loaders/cpcb_reading_loader.py`, written by `current_aqi_dag`), stamped lastupdate - 1.5 h.
   - Validated against OpenAQ (`scripts/cpcb_subindex_study.py`: PM2.5 medAE 1.2 ug/m3, ratio 1.00).
@@ -248,6 +316,12 @@ A production-style service that tells **Delhi NCR schools whether outdoor practi
 - API Docker image is minimal (no `requests`): API modules must not import ingestion code.
 
 ## 5. Incidents and lessons (do not repeat)
+- **Session 10: nothing rejected an impossible sensor value**, so a reading of 2,938,322 ug/m3 became a training label and the API served a forecast of 8,243. Lesson: look at the maxima of any new data source before training on it; `scripts/reading_outlier_diagnosis.py` does that.
+- **Session 10: seasonal features with one year of history are date identifiers.** `is_stubble_season` turned true on 1 October and the forecasts tripled overnight. Lesson: a block-holdout backtest (hide a whole season, score on it) exposes this; a 30-day holdout at the end of the data does not.
+- **Session 10: backtest before building.** The daily LightGBM family was built and tested (223 tests) before the backtest showed it lost to the last-24h mean. The plumbing survived; the model did not. Run the cheap backtest first, and always include the naive baseline.
+- **Session 10: holdout F1 on a clean-air month says nothing** (0.000 nearly everywhere), and `promote_if_better` can keep a model trained on bad data because its old score is higher. After a data correction, retrain with forced activation (`scripts/retrain_models.py`).
+- **Session 10: a command chain committed and pushed a failing test** (`... | tail -1 && git commit`: the pipe's exit status is `tail`'s). Run the tests, read the result, then commit.
+- **Session 10: `monkeypatch.undo()` in a test also undoes autouse fixtures' patches.** Restore the one attribute instead.
 - Images bake code: after any code change, `docker compose build` then `up -d --force-recreate`; `stop/start` does not re-read `docker/.env`.
 - **OpenAQ suspended the account once** (rate-limit violations from overlapping runs) — resolved, new key working, `max_active_runs=1` + quota-header pacing prevents a repeat. Never create a second account/key to evade a suspension.
 - **The owner's PC went dark for hours-to-days at a time** (sleep/reboot) with no one noticing — the actual reason for the Oracle Cloud migration. Resolved by moving to a real always-on server with `restart: unless-stopped` and a dead-man's-switch ping (healthchecks.io).
@@ -272,6 +346,7 @@ A production-style service that tells **Delhi NCR schools whether outdoor practi
 - GitGuardian flagged a placeholder password once — false positive, fixed, real secrets were never in the repo. The live cloud instance's Postgres/Airflow secrets are freshly generated and were never in git or in `docker/.env` locally.
 
 ## 5a. NEXT PHASE: Phase 6 "winter readiness" (planned 2026-09-30, session 8)
+**Status 2026-10-04: see "Phase 6 status" in section 0.** P0 is closed except the NO2 proof rerun; P1 items 4-6 are done (graded daily verdicts from a model-free rule, decision probability 0.4); P2 is open. The text below is the plan as written.
 Delhi's pollution season starts mid-October (stubble burning) and peaks in November, which is when the service matters. Target: all of P0 and P1 deployed by **~2026-10-18**.
 
 **Status on 2026-09-30 ~15:30 UTC (public API):** current AQI fresh at 67/85 stations (CPCB direct feed works). **Forecasts only at 7/85** (PM2.5: 6 no-go, 1 go; 78 no-data): OpenAQ's CPCB relay has been down since 2026-09-25, 5 days. The one point of failure is now the forecast input.
@@ -328,6 +403,8 @@ Delhi's pollution season starts mid-October (stubble burning) and peaks in Novem
 **Later (Phase 7):** multi-region (`docs/multi_region_plan.md`); decide whether `/model-health` stays public; demo mode stays (the project is non-commercial).
 
 ## 6. Next steps, in priority order
+**Status 2026-10-04:** item 2 (verdicts of the new models) and item 4 (a proper daily verdict) are done: see section 0. Item 3 is done except step 9. The current list of next steps is in section 0.
+
 1. **Section 0 checks** first.
 2. **New models' verdicts** (open question). After the 2026-09-25 retrain, PM2.5 was no-go at 55 of 59 stations with a verdict (26 before).
    - Partly inflated by the old/new row mix, fixed in `7268c4e` and deployed.
@@ -371,6 +448,7 @@ Delhi's pollution season starts mid-October (stubble burning) and peaks in Novem
    - tear down the dormant Lovable project and the local stack (optional).
 
 ## 6a. Forecast coverage + model backtest (2026-09-25)
+**Note 2026-10-04:** these results are about the hourly family, which is no longer served. The backtests behind the daily verdicts are in section 0 and in `scripts/daily_verdict_backtest.py`'s docstring.
 - **Why most stations are `no-data`**: 68 of 85 stations DO have OpenAQ PM2.5 data, but it arrives about 12 h late (CPCB via OpenAQ), and `MAX_INPUT_STALENESS_HOURS` = 6 rejects it. Only 7 stations are under 6 h.
 - **Backtest** (`scripts/backtest_models.py`, read-only; test window 2026-08-22..09-24, 70 stations, monsoon so few exceedances). The production rule (P(PM2.5 > 91) >= 0.3) has hourly recall 0.32 / precision 0.18 at 24 h, falling to about 0.2 at 72-120 h. It beats persistence (0.14 / 0.14) at every horizon. Per local day (any hour > 91): recall 0.16-0.31, precision 0.26-0.47. MAE is similar to persistence at 24-48 h and better at 96-120 h. A 24 h rolling mean beats it at 24-72 h.
 - **Staleness costs little**: rule recall is 0.32 at 24 h vs 0.30 at 48 h, so a 12-24 h older anchor loses little skill.
@@ -381,6 +459,11 @@ Delhi's pollution season starts mid-October (stubble burning) and peaks in Novem
 - **Winter test** (`scripts/winter_eval.py`, test window 2026-01-15..03-23, 89% of station-days bad): daily no-go recall for the old Mar-Sep models fell from 0.78 (day 1) to 0.28 (day 5); models trained with winter data held 0.95-0.97 at every horizon with precision 0.90-0.92 (near the 0.89 base rate - the gain is not missing bad days). Hourly precision ~0.5 vs 0.7 for persistence; MAE worse at 3-5 days (models lean high). On that evidence all models were retrained on 365 days and force-promoted (not the usual holdout-F1 comparison, which would have judged them on a monsoon month).
 
 ## 7. Operating notes
+- **Switching the served model family:** edit `forecast.target` in `config/settings.yaml` (`hourly` or `daily_mean`), commit, push; on the server `git pull` and recreate `api airflow-scheduler airflow-webserver`. `config/` is bind-mounted read-only into the containers, so no image rebuild is needed for a config change, but a restart is. Before serving a family for the first time: `retrain_models.py --apply --target <family>` then `generate_forecasts.py --target <family>`.
+- **After any correction to readings or features:** `rebuild_features.py --days 372` (8 minutes for all stations), then `retrain_models.py --apply` (about 20 minutes for the hourly family, under 5 for the daily one). The log starts with `ROLLBACK` lines listing the previously active model ids.
+- **Local tests, the working recipe (session 10):** start Docker Desktop; `docker compose up -d postgres` in `docker/`; build `TEST_DATABASE_URL` from `POSTGRES_USER` and `POSTGRES_PASSWORD` in `docker/.env` only (sourcing the whole file sets container paths and breaks config loading); `python -m scripts.setup_test_db` after adding a migration; `pytest tests --deselect tests/integration/test_station_activity.py::test_regions_endpoint_and_station_region_and_local_day`. Afterwards `docker compose down` and `docker desktop stop`.
+- **Tests pin the hourly family** (`tests/conftest.py`, autouse); a test opts into the daily family with the `daily_target` fixture. So the suite does not depend on what `settings.yaml` serves.
+- **Checking production without ssh:** the public API is enough for coverage, verdict mix, a station's forecast (`/forecast/{id}`) and 90 days of readings (`/forecast/{id}/history?lookback_days=90`). Anything else is an owner-run, read-only script piped into the scheduler container.
 - **Server access**: `ssh air-pollution-backend` (or `ssh ubuntu@137.23.49.72`) — owner's own key works independently of any Claude session. Repo is cloned at `~/air-pollution-backend` on the server; `git config core.fileMode false` is set there (a pulled script's `+x` bit otherwise blocks the next `git pull`). Secrets live only in the server's `docker/.env` (never committed, never printed). A read-only GitHub deploy key is registered on the backend repo for the server to `git pull` with.
 - **Deploying a backend code change**: commit and push locally. Then on the server: `git pull && cd docker && sudo docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --force-recreate --build <services>`. Python code is baked into the images, so rebuild every service whose code changed: usually `api airflow-scheduler airflow-webserver`. **Add `db-migrate` whenever a new Alembic migration ships**: it has its own image, and running the old image skips the migration. Avoid :10-:17 (ingestion), :30, :40 and :45 past the hour, so running tasks aren't killed. `dashboard` and `mailhog` are deliberately left out of production.
 - **Running one-off Python on the server**: `scripts/` is not in the images. Pipe a file in with `sudo docker exec -i docker-airflow-scheduler-1 python - < /tmp/x.py`. `/app` is importable, and args go after `python -`. For long jobs, wrap in `nohup sh -c "..." > ~/log 2>&1 &`. A `docker exec -i` inside a `bash -s` heredoc swallows the rest of the script's stdin: give it `< /dev/null` or its own input.
