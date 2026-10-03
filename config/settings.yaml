@@ -9,7 +9,7 @@ forecast:
   #               category (owner decision 2026-10-02; models/daily.py).
   # Models and forecasts of both families can coexist (their `target` column),
   # so this can be switched in either direction.
-  target: hourly
+  target: daily_mean
   quantiles: [0.1, 0.5, 0.9]
 
 features:
