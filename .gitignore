@@ -38,6 +38,7 @@ htmlcov/
 .claude-flow/data/
 .claude-flow/logs/
 .claude-flow/sessions/
+.claude-flow/memory/
 .claude-flow/metrics/
 .claude-flow/system/
 .claude-flow/mods/
