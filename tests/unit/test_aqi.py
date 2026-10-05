@@ -47,3 +47,30 @@ def test_sub_index_at_the_top_of_the_scale_is_a_capped_floor():
     thresholds = get_region("delhi-ncr").thresholds()
     assert concentration_from_sub_index(thresholds, "pm25", 500) == (380.0, True)
     assert concentration_from_sub_index(thresholds, "pm25", 612) == (380.0, True)
+
+
+def test_sub_index_from_concentration_follows_the_cpcb_bands():
+    from common.aqi import category_for_sub_index, concentration_from_sub_index, sub_index_from_concentration
+    from common.constants import Pollutant
+    from models.exceedance import get_aqi_category, load_thresholds
+
+    thresholds = load_thresholds()
+    # CPCB's published anchor points and band edges for PM2.5.
+    for conc, index in [(0, 0), (30, 50), (31, 51), (60, 100), (61, 101), (90, 200), (91, 201), (120, 300),
+                        (121, 301), (250, 400), (251, 401), (380, 500)]:
+        assert sub_index_from_concentration(thresholds, "pm25", conc) == index, conc
+    assert sub_index_from_concentration(thresholds, "pm25", 62) == 104  # 101 + 1 * 99 / 29
+    assert sub_index_from_concentration(thresholds, "no2", 181) == 201
+
+    # Above the scale and below zero it stays on the scale.
+    assert sub_index_from_concentration(thresholds, "pm25", 5000) == 500
+    assert sub_index_from_concentration(thresholds, "pm25", -3) == 0
+
+    # The index always lands in the category the concentration is graded as,
+    # including values between CPCB's integer ranges, and it inverts the inverse.
+    for conc in [0.4, 30.5, 45, 60.5, 75.2, 90.9, 91, 120.7, 200, 250.5, 379]:
+        index = sub_index_from_concentration(thresholds, "pm25", conc)
+        assert category_for_sub_index(thresholds, index) == get_aqi_category(thresholds, Pollutant.PM25, conc), conc
+    for index in [10, 75, 150, 250, 350, 450]:
+        conc, _ = concentration_from_sub_index(thresholds, "pm25", index)
+        assert sub_index_from_concentration(thresholds, "pm25", conc) == index

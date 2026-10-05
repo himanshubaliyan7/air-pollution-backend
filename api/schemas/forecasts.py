@@ -49,6 +49,11 @@ class ExceedanceDayOut(BaseModel):
     # "go" | "caution" | "no-go". Null only from a service version older than this field.
     verdict: str | None = None
     expected_value: float | None = None  # median forecast
+    # The AQI sub-index of expected_value for THIS pollutant, on the region's AQI scale. It is
+    # not an overall AQI (the worst of several pollutants, most of which are not forecast), so
+    # it can be far below the current overall index. Label it with the pollutant. It describes
+    # the expected value, while aqi_category may be a worse category the day could reach.
+    expected_sub_index: int | None = None
 
 
 class ExceedanceSummaryOut(BaseModel):

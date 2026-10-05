@@ -46,6 +46,7 @@ def summary_out(outlook: Outlook) -> ExceedanceSummaryOut:
                 aqi_category=d.aqi_category,
                 verdict=d.verdict,
                 expected_value=d.expected_value,
+                expected_sub_index=d.expected_sub_index,
             )
             for d in outlook.days
         ],

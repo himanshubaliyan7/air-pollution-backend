@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from common.aqi import sub_index_from_concentration
 from common.config import forecast_target
 from common.constants import DEFAULT_HORIZONS_HOURS, DEFAULT_QUANTILES, MAX_INPUT_STALENESS_HOURS, ForecastTarget, Pollutant
 from common.freshness import floor_hour, is_input_fresh
@@ -43,6 +44,9 @@ class OutlookDay:
     worst_case_value: float
     aqi_category: str
     verdict: str  # "go" | "caution" | "no-go"
+    # CPCB sub-index of expected_value for this pollutant alone. Not an overall
+    # AQI: that is the worst of several pollutants, most of them not forecast.
+    expected_sub_index: int
 
 
 def _hourly_day(day: date, r: Forecast, thresholds: dict, pollutant: Pollutant) -> OutlookDay:
@@ -60,6 +64,7 @@ def _hourly_day(day: date, r: Forecast, thresholds: dict, pollutant: Pollutant) 
         worst_case_value=r.quantile_high,
         aqi_category=get_aqi_category(thresholds, pollutant, r.quantile_high),
         verdict=verdict,
+        expected_sub_index=sub_index_from_concentration(thresholds, pollutant.value, r.point_forecast),
     )
 
 
@@ -76,6 +81,7 @@ def _daily_mean_day(day: date, r: Forecast, thresholds: dict, pollutant: Polluta
         worst_case_value=r.quantile_high,
         aqi_category=category,
         verdict=verdict_for_category(category, thresholds, pollutant),
+        expected_sub_index=sub_index_from_concentration(thresholds, pollutant.value, r.point_forecast),
     )
 
 

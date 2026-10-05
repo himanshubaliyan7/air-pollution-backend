@@ -42,6 +42,22 @@ def concentration_from_sub_index(thresholds: dict, pollutant: str, sub_index: fl
     return top_conc, True
 
 
+def sub_index_from_concentration(thresholds: dict, pollutant: str, concentration: float) -> int:
+    """CPCB sub-index of a concentration, linear within each band (CPCB's own
+    formula) and rounded as CPCB publishes it. A band runs from its lower bound
+    up to the next band's, as in models.exceedance.get_aqi_category, so the
+    index always falls in the category that function names: 60.5 is still the
+    top of its band (100), not a gap. Capped at the top of the scale."""
+    bands = thresholds["pollutants"][pollutant]["breakpoints"]
+    band = bands[0]
+    for candidate in bands:
+        if concentration >= candidate["conc_range"][0]:
+            band = candidate
+    (i_lo, i_hi), (c_lo, c_hi) = band["aqi_range"], band["conc_range"]
+    within = min(max(concentration, c_lo), c_hi)
+    return round(i_lo + (within - c_lo) * (i_hi - i_lo) / (c_hi - c_lo))
+
+
 def at_or_above_health_threshold(thresholds: dict, category: str) -> bool:
     """True when `category` is at or worse than the region's declared
     health-threshold category (the level at which outdoor practice is not

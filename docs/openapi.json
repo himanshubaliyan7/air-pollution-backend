@@ -1047,6 +1047,17 @@
               }
             ],
             "title": "Expected Value"
+          },
+          "expected_sub_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Sub Index"
           }
         },
         "type": "object",

@@ -97,6 +97,8 @@ def test_each_day_gets_the_category_of_its_mean_and_the_verdict_that_follows(db_
     assert [(d.aqi_category, d.verdict) for d in outlook.days] == [
         ("satisfactory", "go"), ("moderate", "go"), ("poor", "caution"), ("very_poor", "no-go"), ("severe", "no-go")]
     assert [d.expected_value for d in outlook.days] == [40, 80, 100, 180, 300]
+    # Each expected mean on the CPCB PM2.5 scale (e.g. 100 ug/m3: 201 + 9 * 99 / 29).
+    assert [d.expected_sub_index for d in outlook.days] == [66, 166, 232, 346, 439]
     assert outlook.overall_recommendation == "no-go"
 
 
@@ -144,7 +146,9 @@ def test_api_reports_the_target_the_verdict_and_the_expected_value(db_session, d
     client = TestClient(app)
     body = client.get(f"/api/v1/forecast/{station_id}/exceedance").json()
     assert body["target"] == DAILY and body["overall_recommendation"] == "caution"
-    assert {(d["aqi_category"], d["verdict"], d["expected_value"]) for d in body["days"]} == {("poor", "caution", 100.0)}
+    assert {(d["aqi_category"], d["verdict"], d["expected_value"], d["expected_sub_index"]) for d in body["days"]} == {
+        ("poor", "caution", 100.0, 232)
+    }
 
     series = client.get(f"/api/v1/forecast/{station_id}").json()
     assert series["target"] == DAILY and len(series["forecasts"]) == 5
