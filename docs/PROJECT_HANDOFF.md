@@ -1,9 +1,27 @@
-# Project handoff (written 2026-09-22; rewritten 2026-09-25, end of session 5; updated 2026-09-30, end of session 8; updated 2026-10-01, end of session 9; updated 2026-10-04, end of session 10)
+# Project handoff (written 2026-09-22; rewritten 2026-09-25, end of session 5; updated 2026-09-30, end of session 8; updated 2026-10-01, end of session 9; updated 2026-10-04, end of session 10; updated 2026-10-05, session 12)
 
 Read this first in a new chat. It is the complete state of the project: goal, what exists, how it was built, what went wrong, and what to do next. Auto-memory (`MEMORY.md`) holds the same facts in shorter form. **No secrets are in this file.**
 
 ## 0. START HERE: session 11
 **State at the end of session 10 (2026-10-04 IST; last API check 2026-10-03 17:57 UTC = 23:27 IST).** Session 10 ran over two days and changed what the product says: three faults in the forecasts were found and fixed, and the verdict is now graded by the day's mean. The step-by-step record is in section 0a ("Session 10 details").
+
+**Session 12 (2026-10-05, about 12:40-13:30 UTC): the "finish it for the resume" round.** The owner wants the project closed and presentable, not extended.
+- **Checks (public API, 12:43 UTC):** healthy; every outlook `target: daily_mean`. PM2.5 go 58, caution 15, no-go 3, no-data 6; NO2 go at all 69. Current AQI: Moderate 41, Poor 22, Very Poor 2. **First check 3 is closed:** `/model-health` holds rows from the 2026-10-05 00:00 UTC run (the first to score daily forecasts).
+- **air-clear PR #8 was merged by the owner but is NOT deployed:** the live site still shows the hourly wording ("chance of exceeding").
+- **air-clear PR #9 (`feat/modern-dashboard`, `d484f0f`), OPEN: the redesign.** The region page is an overview dashboard built from `/overview` (four figures, stations by category and by verdict, highest and lowest readings, optional map, a station grid with search, category filter and sort). The station page has the index on the category scale, the outlook as a five-day strip, range bars per pollutant and an area chart. New: shared header, light/dark theme, `/about` ("How it works", with the backtest numbers), a real README with screenshots. Fixed on the way: the verdict tone classes were Tailwind 3 syntax and rendered grey. 93 tests, tsc clean, build passes. Viewed in headless Chrome against the live API at 1320 px (light and dark) and in a 390 px frame; not on a real phone; the map was not opened. Deploying it brings PR #8 with it.
+  - `/about` links to both GitHub repositories, which are private: the links 404 for visitors until the owner makes them public.
+- **Backend `3b53ec0` (pushed, NOT deployed):**
+  - The drift check has a rule for the daily family (closes the design gap noted below): over 7 days, the share of station-days above the health threshold that were flagged a day ahead, pooled over all stations; it fails the task below 50 % once at least 20 such days exist (`tasks.daily_verdict_drift`). The hourly rule is unchanged.
+  - `alert_digest_dag` fails, retries and alerts on Telegram when an email could not be sent (`tasks.digest_problem`); a retry sends only the failed ones.
+  - `test_regions_endpoint_and_station_region_and_local_day` is fixed: it moved a hypertable row with an UPDATE of the time column, which TimescaleDB rejects across chunks. **The suite runs with no deselection: 233 pass.**
+- **Backend `0943d50`: GitHub Actions CI** (`.github/workflows/ci.yml`): the whole suite against the TimescaleDB image on every push; the first run passed. **README.md** added (architecture diagram, how a verdict is made, backtest table, production problems and fixes, how to run).
+- **Owner steps to finish (in this order):**
+  1. Deploy the backend (code changed, no migration): `cd ~/air-pollution-backend && git pull && cd docker && sudo docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --force-recreate --build api airflow-scheduler airflow-webserver` in a :50-:58 or :20-:28 UTC window.
+  2. Look at PR #9 (screenshots in `docs/screenshots/`), merge it, deploy the frontend from `D:\Desktop\air-clear` as before.
+  3. Decide whether to make the two repositories public (needed for a resume link). Before that: check the git history for anything private, and revoke the Cloudflare token from session 9 if that is still open.
+  4. Still open from earlier, none blocks the demo: `fix_station_coordinates.py`; go-live step 9; the NO2 unit proof rerun; a look on a real phone.
+- **Not done on purpose:** the old worktrees under `.claude/worktrees/` and the `airpollution_{sub,qa,dba,ops}_test` databases are still there (some worktrees hold uncommitted work; deleting needs the owner's word).
+- Commits in this repository carry no `Co-Authored-By` line (CLAUDE.md rule); the note at the end of section 7 is out of date on that point.
 
 **Session 11 so far (2026-10-04 17:12 UTC = 22:42 IST; public API only, no backend code changed):**
 - **First checks 1, 2 and 4:** API healthy; every outlook reports `target: daily_mean`; forecasts were made at 15:00 UTC, so serving survived the first weekly retrain with the daily family (whether the ratios were refitted is not visible from outside: ask the owner for the `retraining_dag` state). PM2.5: go 51, caution 22, no-go 5, no-data 4 (78 stations with a verdict). NO2: go at all 69. Current AQI: Moderate 38, Poor 25, Very Poor 2. No PM2.5 forecast only at MD University Rohtak, Sector 11 Faridabad, Sector 30 Faridabad, Ved Vihar-Loni.
@@ -18,7 +36,7 @@ Read this first in a new chat. It is the complete state of the project: goal, wh
 - **Public API, 2026-10-03 17:57 UTC:** PM2.5 go 58, caution 16, no-go 3, no-data 5 (77 stations with a verdict). NO2 go at all 69 stations with a forecast. Current AQI at that time: mostly Moderate, about 17 stations Poor. Three days earlier, under the hourly rule: no-go at 64 of 68.
 - **The hourly model family still exists** (models active, `target = hourly` rows) but is no longer served, forecast or retrained. It is the rollback: set `forecast.target: hourly`, push, restart the containers.
 - **Frontend:** air-clear `main` = `a26c652`, unchanged in session 10. It shows the new categories and verdicts correctly (the API fields kept their names), but its texts still describe the hourly rule.
-- Tests: backend 226 pass (one known failure still deselected). They need the local test database: section 7.
+- Tests: backend 233 pass, none deselected (session 12); they also run in GitHub Actions. Locally they need the test database: section 7.
 
 **Three faults fixed in session 10 (all deployed and verified on the public API):**
 1. **Sensor faults were training data.** OpenAQ held PM2.5 readings of exactly 10,000 ug/m3 at six stations and one of 2,938,322; Shadipur's forecast reached 8,243. Fix: `common.constants.PLAUSIBLE_RANGE` (PM2.5 0-2,000, NO2 0-500), applied in `db/readings.py::hourly_readings` for every consumer. Raw rows are kept.
