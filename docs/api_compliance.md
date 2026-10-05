@@ -35,7 +35,7 @@ Legend: [V] verified from the provider's own page on the date shown, [U] could n
   - Known risk [V, cpcb.gov.in/copyright-policy, 2026-09-27]: CPCB's website policy says site material "may be downloaded to file or printer without requiring specific prior permission. Any other proposed use of the material is subject to the approval of competent authority of CPCB" (requests to ccb.cpcb@nic.in).
   - The owner accepted this risk. If CPCB objects, switch back to data.gov.in only (remove the CPCB source from orchestration/plugins/common/tasks.py `_fetch_current_aqi`).
 - Volume: one ~360 KB request per hour (plus up to 2 retries). No published rate limit [U].
-- Reachability: another project reported the feed timing out from outside India. Our server is in India (ap-mumbai-1).
+- Reachability: another project reported the feed timing out from outside India. Our server is in India.
 
 ## Adding a new provider (checklist)
 1. Read the terms and rate-limit pages; record limits, key policy, commercial-use, attribution, caching/redistribution rules here with [V]/[U] and the date.
