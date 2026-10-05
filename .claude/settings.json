@@ -9,8 +9,7 @@
     "allow": [
       "Bash(npx @claude-flow*)",
       "Bash(npx claude-flow*)",
-      "Bash(node .claude/*)",
-      "mcp__claude-flow__*"
+      "Bash(node .claude/*)"
     ],
     "deny": [
       "Read(./.env)",
@@ -201,7 +200,7 @@
       "shell": "powershell"
     },
     "modelPreferences": {
-      "default": "claude-sonnet-5",
+      "default": "claude-sonnet-5-5",
       "routing": "claude-haiku-4-5-20251001"
     },
     "agentTeams": {
