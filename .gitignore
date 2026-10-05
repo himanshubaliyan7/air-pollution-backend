@@ -31,3 +31,20 @@ orchestration/airflow.db
 .coverage
 htmlcov/
 .claude/worktrees/
+
+# Ruflo local secrets and runtime data
+.env.local
+.env.*.local
+.claude-flow/data/
+.claude-flow/logs/
+.claude-flow/sessions/
+.claude-flow/metrics/
+.claude-flow/system/
+.claude-flow/mods/
+.claude-flow/policy/
+.claude-flow/rag-mod/
+.claude-flow/trader-mod/
+.claude-flow/security/
+.claude-flow/memory-package.json
+.swarm/
+.claude/settings.json.bak-*
