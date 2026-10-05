@@ -551,15 +551,74 @@ def evaluate_recent_forecasts(evaluation_window_days: int = 1) -> int:
         session.close()
 
 
+# The daily-mean family (a fixed rule, not a trained model) is judged on a week
+# of day-ahead verdicts over all stations: the share of days above the health
+# threshold that had been flagged. Backtests put it near 0.9 at the season's
+# onset; one calm week has too few such days to say anything.
+DAILY_DRIFT_WINDOW = timedelta(days=7)
+DAILY_DRIFT_HORIZON_HOURS = 24
+DAILY_DRIFT_MIN_RECALL = 0.5
+DAILY_DRIFT_MIN_DAYS = 20
+
+
+def daily_verdict_drift(session, now: datetime) -> str | None:
+    """evaluation_monitoring_dag, daily-mean family: a message for the
+    maintainer when the past week's day-ahead verdicts missed too many days
+    above the health threshold, else None."""
+    from db.models import ExceedanceEvaluation
+
+    rows = [
+        (n_actual, recall)
+        for n_actual, recall in session.execute(
+            select(ExceedanceEvaluation.n_exceedance_days_actual, ExceedanceEvaluation.recall)
+            .join(ModelRun, ModelRun.model_id == ExceedanceEvaluation.model_id)
+            .where(
+                ModelRun.target == ForecastTarget.DAILY_MEAN.value,
+                ExceedanceEvaluation.horizon_hours == DAILY_DRIFT_HORIZON_HOURS,
+                ExceedanceEvaluation.computed_at >= now - DAILY_DRIFT_WINDOW,
+            )
+        ).all()
+    ]
+    if not evaluation.missed_days_drift(rows, DAILY_DRIFT_MIN_RECALL, DAILY_DRIFT_MIN_DAYS):
+        return None
+    recall, days = evaluation.pooled_recall(rows)
+    return (
+        f"Daily verdict check failed: over the last {DAILY_DRIFT_WINDOW.days} days only {recall:.0%} of the {days} "
+        f"station-days above the health threshold were flagged a day ahead (floor {DAILY_DRIFT_MIN_RECALL:.0%}). "
+        "The level rule follows the last 24 h, so a sharp rise is missed for a day; if this persists, "
+        "lower daily_mean_decision_probability in config/thresholds_cpcb.yaml."
+    )
+
+
 # -------------------------------------------------------------------- alerts
 
+def digest_problem(result: dict[str, int]) -> str | None:
+    """What to tell the maintainer about a digest run, or None when every
+    subscriber who should get the email has it. A subscriber already served
+    today ("skipped") counts as served, so a retry that mends the failures
+    passes."""
+    failed = result.get("failed", 0)
+    if not failed:
+        return None
+    served = result.get("sent", 0) + result.get("skipped", 0)
+    return f"Daily digest: {failed} of {failed + served} emails could not be sent (see digest_log.error_detail)."
+
+
 def send_daily_digest() -> dict[str, int]:
-    """alert_digest_dag: tomorrow's outlook to every confirmed subscriber."""
+    """alert_digest_dag: tomorrow's outlook to every confirmed subscriber.
+
+    Raises when an email failed, so the task retries (only the failed ones are
+    sent again) and the DAG's failure callback tells the maintainer. A missing
+    digest is the one failure a school cannot see for itself."""
     session = get_session()
     try:
-        return send_daily_digests(session, datetime.now(timezone.utc))
+        result = send_daily_digests(session, datetime.now(timezone.utc))
     finally:
         session.close()
+    problem = digest_problem(result)
+    if problem:
+        raise RuntimeError(problem)
+    return result
 
 
 def purge_stale_subscriptions() -> dict[str, int]:

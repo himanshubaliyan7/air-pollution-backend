@@ -5,7 +5,7 @@ from airflow.operators.python import PythonOperator
 
 from orchestration.plugins.common.alerts import notify_task_failure
 
-from orchestration.plugins.common.tasks import evaluate_recent_forecasts
+from orchestration.plugins.common.tasks import daily_verdict_drift, evaluate_recent_forecasts
 
 default_args = {"owner": "air-pollution-prediction", "on_failure_callback": notify_task_failure, "retries": 1, "retry_delay": timedelta(minutes=10)}
 
@@ -15,6 +15,8 @@ MIN_RECALL = 0.4  # below this, maintainers (not schools) get paged - see drift_
 def _evaluate_and_check_drift(**_):
     from sqlalchemy import select
 
+    from common.config import forecast_target, utc_now
+    from common.constants import ForecastTarget
     from db.models import ExceedanceEvaluation
     from db.session import get_session
     from models.evaluation import recall_drift_detected
@@ -23,6 +25,13 @@ def _evaluate_and_check_drift(**_):
 
     session = get_session()
     try:
+        if forecast_target() is ForecastTarget.DAILY_MEAN:
+            # The rule below reads one evaluation's recall, which for a
+            # one-day window is 0 or 1; the daily family has its own.
+            problem = daily_verdict_drift(session, utc_now())
+            if problem:
+                raise RuntimeError(problem)
+            return written
         recent = session.execute(
             select(ExceedanceEvaluation.recall)
             .where(ExceedanceEvaluation.recall.is_not(None))

@@ -40,6 +40,28 @@ def recall_drift_detected(recalls: list, min_recall: float) -> bool:
     return bool(defined) and len(low) > len(defined) / 2
 
 
+def pooled_recall(rows: list[tuple[int, float | None]]) -> tuple[float | None, int]:
+    """Recall over several evaluations taken together, and the number of real
+    exceedances behind it. Each row is (n_exceedance_days_actual, recall).
+
+    A daily-mean evaluation covers one station and one day, so its own recall
+    is 0 or 1 and says nothing by itself; pooled over a week and all stations
+    it is the share of days above the health threshold that were flagged."""
+    actual = sum(n for n, recall in rows if recall is not None)
+    if actual == 0:
+        return None, 0
+    caught = sum(n * recall for n, recall in rows if recall is not None)
+    return caught / actual, actual
+
+
+def missed_days_drift(rows: list[tuple[int, float | None]], min_recall: float, min_days: int) -> bool:
+    """True when at least min_days real exceedance days were evaluated and
+    fewer than min_recall of them had been flagged. Below min_days there is
+    too little evidence to raise an alarm either way."""
+    recall, actual = pooled_recall(rows)
+    return recall is not None and actual >= min_days and recall < min_recall
+
+
 def pinball_loss(y_true: np.ndarray, y_pred: np.ndarray, quantile: float) -> float:
     diff = y_true - y_pred
     return float(np.mean(np.maximum(quantile * diff, (quantile - 1) * diff)))

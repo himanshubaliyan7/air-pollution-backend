@@ -46,3 +46,14 @@ def test_failure_callback_reports_dag_task_and_error_and_survives_bad_context(mo
     alerts.notify_task_failure({"task_instance": TI(), "exception": RuntimeError("401")})
     assert "ingestion_dag.fetch_openaq_readings" in sent[0] and "RuntimeError" in sent[0]
     alerts.notify_task_failure({})  # must not raise
+
+
+def test_digest_run_with_a_failed_email_is_reported():
+    from orchestration.plugins.common.tasks import digest_problem
+
+    assert digest_problem({"sent": 3, "failed": 0, "skipped": 0, "not_invited": 2}) is None
+    assert digest_problem({"sent": 0, "failed": 0, "skipped": 0, "not_invited": 0}) is None
+    # A retry after a partial failure: the mended ones show up as skipped.
+    assert digest_problem({"sent": 1, "failed": 0, "skipped": 2, "not_invited": 0}) is None
+    assert "2 of 5" in digest_problem({"sent": 2, "failed": 2, "skipped": 1, "not_invited": 4})
+    assert "1 of 1" in digest_problem({"sent": 0, "failed": 1, "skipped": 0, "not_invited": 0})

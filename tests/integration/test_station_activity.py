@@ -140,7 +140,7 @@ def test_regions_endpoint_and_station_region_and_local_day(db_session):
     from tests.integration.test_api import _seed_station_and_forecast  # noqa: PLC0415
     from api.main import app
     from db.models import Forecast
-    from sqlalchemy import update
+    from sqlalchemy import delete, insert, select, update
 
     client = TestClient(app)
     regions = client.get("/api/v1/regions").json()
@@ -164,7 +164,14 @@ def test_regions_endpoint_and_station_region_and_local_day(db_session):
     # 20:00 UTC is 01:30 the NEXT day in Asia/Kolkata: the day bucket must follow the region zone.
     made = datetime.now(timezone.utc).replace(hour=20, minute=0, second=0, microsecond=0)
     db_session.execute(update(Forecast).values(forecast_made_at=NOW))  # keep the whole run together
-    db_session.execute(update(Forecast).where(Forecast.horizon_hours == 24).values(target_time=made))
+    # target_time is the hypertable's time column: an UPDATE cannot move a row
+    # into another chunk (TimescaleDB raises CheckViolation), so re-insert it.
+    moved = [
+        {c.name: getattr(row, c.name) for c in Forecast.__table__.columns} | {"target_time": made}
+        for row in db_session.execute(select(Forecast).where(Forecast.horizon_hours == 24)).scalars()
+    ]
+    db_session.execute(delete(Forecast).where(Forecast.horizon_hours == 24))
+    db_session.execute(insert(Forecast), moved)
     db_session.commit()
     body = client.get(f"/api/v1/forecast/{sid}/exceedance", params={"pollutant": "pm25"}).json()
     assert body["timezone"] == "Asia/Kolkata"

@@ -254,3 +254,44 @@ def test_switch_rehearsal_train_and_forecast_the_daily_family_while_the_hourly_o
     outlook = build_outlook(db_session, station, Pollutant.PM25, now=now)
     assert outlook.is_current and len(outlook.days) == n
     assert {d.aqi_category for d in outlook.days} == {"very_poor"} and outlook.overall_recommendation == "no-go"
+
+
+def _add_evaluation(session, station_id, model_id, computed_at, *, flagged: bool | None, horizon: int = 24):
+    """One station-day of the nightly evaluation. flagged=None: the day was below the threshold."""
+    session.add(ExceedanceEvaluation(
+        station_id=station_id, pollutant=Pollutant.PM25, horizon_hours=horizon, model_id=model_id,
+        evaluation_window_start=computed_at - timedelta(days=1), evaluation_window_end=computed_at,
+        recall=None if flagged is None else float(flagged), mae=1.0, rmse=1.0,
+        n_exceedance_days_actual=0 if flagged is None else 1, n_exceedance_days_predicted=int(bool(flagged)),
+        computed_at=computed_at,
+    ))
+
+
+def test_weekly_drift_check_counts_missed_days_of_the_daily_family_only(db_session):
+    now = MIDNIGHT_18TH
+    station_id = add_station(db_session, "drift")
+    daily_model = add_model_run(db_session, station_id)
+    db_session.query(ModelRun).filter_by(model_id=daily_model).update({"target": DAILY})
+    hourly_model = add_model_run(db_session, station_id, horizon=48)  # the hourly family, by default
+    recent = now - timedelta(days=1)
+
+    # 25 real bad days, 5 flagged: but hourly rows, old rows and longer horizons must not count.
+    for _ in range(25):
+        _add_evaluation(db_session, station_id, hourly_model, recent, flagged=False)
+        _add_evaluation(db_session, station_id, daily_model, now - timedelta(days=9), flagged=False)
+        _add_evaluation(db_session, station_id, daily_model, recent, flagged=False, horizon=48)
+        _add_evaluation(db_session, station_id, daily_model, recent, flagged=None)
+    db_session.commit()
+    assert tasks.daily_verdict_drift(db_session, now) is None
+
+    for i in range(25):
+        _add_evaluation(db_session, station_id, daily_model, recent, flagged=i < 5)
+    db_session.commit()
+    message = tasks.daily_verdict_drift(db_session, now)
+    assert message is not None and "20% of the 25" in message
+
+    # Most bad days flagged: no alarm.
+    for _ in range(40):
+        _add_evaluation(db_session, station_id, daily_model, recent, flagged=True)
+    db_session.commit()
+    assert tasks.daily_verdict_drift(db_session, now) is None
