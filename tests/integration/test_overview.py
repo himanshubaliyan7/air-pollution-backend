@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from common.constants import MAX_INPUT_STALENESS_HOURS, Pollutant
 from db.models import StationAqiSnapshot
-from tests.integration.forecast_helpers import add_station, seed_forecast_run
+from tests.integration.forecast_helpers import add_reading, add_station, seed_forecast_run
 
 NOW = datetime.now(timezone.utc)
 HOUR = NOW.replace(minute=0, second=0, microsecond=0)
@@ -106,3 +106,34 @@ def test_overview_filters_by_region_and_days_ahead(db_session):
     pm25 = next(s for s in in_region if s["station_id"] == full)["outlooks"][0]
     assert len(pm25["days"]) == 2 and pm25["overall_recommendation"] == "go"  # the flagged day is day 3
     assert client.get("/api/v1/overview", params={"region_id": "nowhere"}).json()["stations"] == []
+
+
+def test_overview_history_gives_each_hour_its_category_and_leaves_gaps_empty(db_session):
+    from api.main import app
+
+    measured = add_station(db_session, "measured")
+    silent = add_station(db_session, "silent")
+    add_station(db_session, "inactive", active=False)
+    add_reading(db_session, measured, HOUR - timedelta(hours=3), value=20.0)
+    add_reading(db_session, measured, HOUR - timedelta(hours=1), value=95.0)
+    add_reading(db_session, measured, HOUR - timedelta(hours=9), value=300.0)  # before the window
+    add_reading(db_session, measured, HOUR - timedelta(hours=2), pollutant=Pollutant.NO2, value=40.0)  # other pollutant
+    db_session.commit()
+
+    client = TestClient(app)
+    response = client.get("/api/v1/overview/history", params={"hours": 4})
+    assert response.status_code == 200 and response.headers["cache-control"] == "public, max-age=120"
+    body = response.json()
+    assert body["pollutant"] == "pm25"
+    assert [datetime.fromisoformat(h) for h in body["hours"]] == [HOUR - timedelta(hours=b) for b in (3, 2, 1, 0)]
+    by_id = {s["station_id"]: s for s in body["stations"]}
+    assert set(by_id) == {measured, silent}
+    assert by_id[measured]["values"] == [20.0, None, 95.0, None]
+    assert by_id[measured]["categories"] == ["good", None, "poor", None]
+    assert by_id[silent]["values"] == [None] * 4 and by_id[silent]["categories"] == [None] * 4
+
+    # The station's own history names the same category for the same hour.
+    points = client.get(f"/api/v1/forecast/{measured}/history", params={"lookback_days": 1}).json()["points"]
+    assert [(p["actual"], p["aqi_category"]) for p in points] == [(300.0, "severe"), (20.0, "good"), (95.0, "poor")]
+
+    assert client.get("/api/v1/overview/history", params={"region_id": "nowhere"}).json()["stations"] == []

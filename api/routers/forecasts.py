@@ -13,6 +13,7 @@ from common.constants import ForecastTarget, Pollutant
 from common.regions import region_for_point
 from db.models import ExceedanceEvaluation, Forecast, Station
 from db.readings import hourly_readings
+from models.exceedance import get_aqi_category
 from models.outlook import is_forecast_current, latest_forecast_made_at  # noqa: F401  (re-exported)
 
 router = APIRouter(tags=["forecasts"])
@@ -137,9 +138,18 @@ def get_forecast_history(
             if r.target_time >= window_start:
                 forecast_by_time.setdefault(r.target_time, r.point_forecast)  # earliest made_at wins
 
+    region = region_for_point(station.lat, station.lon)
+    thresholds = region.thresholds() if region else None
     all_times = sorted(set(actual_by_time) | set(forecast_by_time))
     points = [
-        HistoryPointOut(time=t, actual=actual_by_time.get(t), forecast_value=forecast_by_time.get(t))
+        HistoryPointOut(
+            time=t,
+            actual=actual_by_time.get(t),
+            forecast_value=forecast_by_time.get(t),
+            aqi_category=get_aqi_category(thresholds, pollutant, actual_by_time[t])
+            if thresholds and t in actual_by_time
+            else None,
+        )
         for t in all_times
     ]
     return HistoryOut(

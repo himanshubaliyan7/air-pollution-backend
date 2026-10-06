@@ -54,3 +54,19 @@ def hourly_readings(
         select(RawSensorReading.observed_at, RawSensorReading.value, RawSensorReading.source).where(*conditions)
     ).all()
     return one_value_per_hour([r for r in rows if is_plausible(pollutant, r.value)])
+
+
+def hourly_readings_by_station(
+    session: Session, pollutant: Pollutant, start: datetime
+) -> dict[str, list[tuple[datetime, float]]]:
+    """hourly_readings for every station at once, in one query."""
+    rows = session.execute(
+        select(
+            RawSensorReading.station_id, RawSensorReading.observed_at, RawSensorReading.value, RawSensorReading.source
+        ).where(RawSensorReading.pollutant == pollutant, RawSensorReading.observed_at >= start)
+    ).all()
+    by_station: dict[str, list] = {}
+    for station_id, observed_at, value, source in rows:
+        if is_plausible(pollutant, value):
+            by_station.setdefault(station_id, []).append((observed_at, value, source))
+    return {station_id: one_value_per_hour(station_rows) for station_id, station_rows in by_station.items()}

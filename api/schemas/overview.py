@@ -32,6 +32,25 @@ class OverviewStationOut(BaseModel):
     outlooks: list[ExceedanceSummaryOut]
 
 
+class OverviewHistoryStationOut(BaseModel):
+    station_id: str
+    # One entry per hour of OverviewHistoryOut.hours; null where nothing was measured.
+    values: list[float | None]
+    # The category each value falls in by the region's thresholds; null with the value,
+    # and for a station outside every region.
+    categories: list[str | None]
+
+
+class OverviewHistoryOut(BaseModel):
+    """The last hours of one pollutant at every active station, for a view that
+    shows the stations side by side. A missing hour is null, never a guess."""
+
+    generated_at: datetime
+    pollutant: str
+    hours: list[datetime]  # the start of each hour (UTC), oldest first
+    stations: list[OverviewHistoryStationOut]
+
+
 class OverviewOut(BaseModel):
     """Everything a map needs for every active station, in one response."""
 

@@ -562,6 +562,77 @@
         }
       }
     },
+    "/api/v1/overview/history": {
+      "get": {
+        "tags": [
+          "overview"
+        ],
+        "summary": "Get Overview History",
+        "description": "The last `hours` measured hours of one pollutant at every active station,\neach with its category: one request for a view of all stations side by side.",
+        "operationId": "get_overview_history_api_v1_overview_history_get",
+        "parameters": [
+          {
+            "name": "region_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Region Id"
+            }
+          },
+          {
+            "name": "pollutant",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Pollutant",
+              "default": "pm25"
+            }
+          },
+          {
+            "name": "hours",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 168,
+              "minimum": 1,
+              "default": 48,
+              "title": "Hours"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverviewHistoryOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/subscriptions/availability": {
       "get": {
         "tags": [
@@ -1322,6 +1393,17 @@
               }
             ],
             "title": "Forecast Value"
+          },
+          "aqi_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aqi Category"
           }
         },
         "type": "object",
@@ -1537,6 +1619,86 @@
         ],
         "title": "OverviewCurrentAqiOut",
         "description": "GET /stations/{id}/current-aqi without the per-station constants (see OverviewOut)."
+      },
+      "OverviewHistoryOut": {
+        "properties": {
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          },
+          "pollutant": {
+            "type": "string",
+            "title": "Pollutant"
+          },
+          "hours": {
+            "items": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "type": "array",
+            "title": "Hours"
+          },
+          "stations": {
+            "items": {
+              "$ref": "#/components/schemas/OverviewHistoryStationOut"
+            },
+            "type": "array",
+            "title": "Stations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "generated_at",
+          "pollutant",
+          "hours",
+          "stations"
+        ],
+        "title": "OverviewHistoryOut",
+        "description": "The last hours of one pollutant at every active station, for a view that\nshows the stations side by side. A missing hour is null, never a guess."
+      },
+      "OverviewHistoryStationOut": {
+        "properties": {
+          "station_id": {
+            "type": "string",
+            "title": "Station Id"
+          },
+          "values": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Values"
+          },
+          "categories": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Categories"
+          }
+        },
+        "type": "object",
+        "required": [
+          "station_id",
+          "values",
+          "categories"
+        ],
+        "title": "OverviewHistoryStationOut"
       },
       "OverviewOut": {
         "properties": {

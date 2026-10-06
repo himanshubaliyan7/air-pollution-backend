@@ -81,6 +81,9 @@ class HistoryPointOut(BaseModel):
     # forecast of this hour's calendar-day mean that was made last before the day began
     # (the same value for every hour of the day).
     forecast_value: float | None
+    # The category `actual` falls in by the region's thresholds, so a client can colour an hour
+    # without knowing any breakpoint. Null without a measurement or outside every region.
+    aqi_category: str | None = None
 
 
 class HistoryOut(BaseModel):
