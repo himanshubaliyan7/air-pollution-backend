@@ -74,6 +74,14 @@ def test_watchdog_inputs_are_per_region_so_a_dark_mumbai_is_reported(db_session,
     assert by_id["delhi-ncr"].active_stations == 1 and by_id["mumbai"].active_stations == 1
     assert by_id["delhi-ncr"].stations_with_fresh_snapshot == 1 and by_id["mumbai"].newest_snapshot is None
     assert by_id["mumbai"].newest_sensor_reading is None and by_id["mumbai"].stations_with_current_forecast == 0
+    assert by_id["delhi-ncr"].has_forecast_models is True and by_id["mumbai"].has_forecast_models is False
+    keys = {i.key for i in evaluate_health(NOW, regions=health, sensor_ingestion_enabled=True)}
+    # Mumbai has never been fitted: no forecasts to be missing, its other rules still apply.
+    assert keys == {"aqi-feed-stale:mumbai", "sensor-data-stale:mumbai"}
+
+    add_model_run(db_session, m)  # once Mumbai has a model, missing forecasts are a fault there too
+    health = collect_region_health(db_session, NOW, two_regions)
+    assert {h.region_id: h.has_forecast_models for h in health} == {"delhi-ncr": True, "mumbai": True}
     keys = {i.key for i in evaluate_health(NOW, regions=health, sensor_ingestion_enabled=True)}
     assert keys == {"aqi-feed-stale:mumbai", "sensor-data-stale:mumbai", "forecast-coverage-low:mumbai"}
 

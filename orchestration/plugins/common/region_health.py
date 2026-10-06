@@ -5,10 +5,11 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 
+from common.config import forecast_target
 from common.constants import MAX_INPUT_STALENESS_HOURS, SensorSourceName
 from common.freshness import floor_hour
 from common.regions import region_for_point
-from db.models import Forecast, RawSensorReading, Station, StationAqiSnapshot
+from db.models import Forecast, ModelRun, RawSensorReading, Station, StationAqiSnapshot
 from orchestration.plugins.common.watchdog import RegionHealth
 
 SNAPSHOT_FRESH_WITHIN = timedelta(hours=3)
@@ -48,6 +49,7 @@ def collect_region_health(session, now: datetime, regions) -> list[RegionHealth]
         session, Forecast.station_id,
         Forecast.forecast_made_at >= cutoff, Forecast.target_time >= cutoff,  # target_time prunes hypertable chunks
     )
+    fitted = _station_ids(session, ModelRun.station_id, ModelRun.target == forecast_target().value)
     fresh_input = _station_ids(session, RawSensorReading.station_id, RawSensorReading.observed_at >= cutoff)
 
     out = []
@@ -62,5 +64,6 @@ def collect_region_health(session, now: datetime, regions) -> list[RegionHealth]
             newest_sensor_reading=max(sens, default=None),
             stations_with_current_forecast=sum(1 for s in forecast if mine(s)),
             stations_with_fresh_input=sum(1 for s in fresh_input if mine(s)),
+            has_forecast_models=any(mine(s) for s in fitted),
         ))
     return out

@@ -92,11 +92,30 @@ def test_minimums_scale_with_the_regions_active_stations():
 
 def test_messages_name_the_region_and_the_counts():
     issues = evaluate_health(NOW, sensor_ingestion_enabled=True, regions=[_region(**dict(MUMBAI, stations_with_fresh_snapshot=2))])
-    assert issues[0].key == "aqi-coverage-low" and issues[0].message.startswith("Mumbai:")  # sole region is the default
+    assert issues[0].key == "aqi-coverage-low:mumbai" and issues[0].message.startswith("Mumbai:")
     assert "2 of 20" in issues[0].message
 
 
-def test_resolved_keys_are_derived_from_the_regions_default_first():
+def test_resolved_keys_are_derived_from_the_default_region():
     keys = all_issue_keys(["delhi-ncr", "mumbai"])
     assert keys[:4] == ["aqi-feed-stale", "aqi-coverage-low", "sensor-data-stale", "forecast-coverage-low"]
     assert keys[4:] == [k + ":mumbai" for k in keys[:4]]
+
+
+def test_delhi_keeps_the_bare_keys_whatever_the_order_of_regions():
+    """Open production issues use the bare keys; reordering regions.yaml must not rename them."""
+    assert _check(_region(**dict(MUMBAI, newest_snapshot=None)), _region(newest_snapshot=None)) == {
+        "aqi-feed-stale", "aqi-feed-stale:mumbai"}
+    assert all_issue_keys(["mumbai", "delhi-ncr"])[:4] == ["aqi-feed-stale:mumbai", "aqi-coverage-low:mumbai",
+                                                            "sensor-data-stale:mumbai", "forecast-coverage-low:mumbai"]
+    assert "aqi-feed-stale" in all_issue_keys(["mumbai", "delhi-ncr"])
+
+
+def test_forecast_rule_applies_only_to_a_region_that_has_been_fitted():
+    """Once Mumbai has stations but no model, forecast-coverage-low would fire every 6 hours
+    until it is backfilled and fitted; its other rules still apply."""
+    unfitted = dict(MUMBAI, stations_with_current_forecast=0, stations_with_fresh_input=20, has_forecast_models=False)
+    assert _check(_region(), _region(**unfitted)) == set()
+    assert _check(_region(), _region(**dict(unfitted, newest_snapshot=None))) == {"aqi-feed-stale:mumbai"}
+    assert _check(_region(), _region(**dict(unfitted, has_forecast_models=True))) == {"forecast-coverage-low:mumbai"}
+    assert _check(_region(stations_with_current_forecast=0, has_forecast_models=False)) == set()  # same rule for any region

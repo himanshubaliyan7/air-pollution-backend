@@ -14,6 +14,11 @@ from datetime import datetime, timedelta
 MAX_SNAPSHOT_AGE = timedelta(hours=3)
 MAX_SENSOR_AGE = timedelta(hours=24)
 
+# The region whose issue keys stay bare (un-suffixed). Pinned to this id, not to "the first
+# region in regions.yaml": issues open in production use the bare keys (aqi-feed-stale ...),
+# and reordering regions.yaml must not rename them and strand those open issues.
+DEFAULT_REGION_ID = "delhi-ncr"
+
 # Count rules are per region and scale with the stations the region has active, so one
 # live city cannot hide a dark one. The fractions reproduce the fixed minimums used
 # before regions (20 and 30) at Delhi's 82 active stations: floor(0.25 * 82) = 20,
@@ -53,9 +58,13 @@ class RegionHealth:
     newest_sensor_reading: datetime | None
     stations_with_current_forecast: int
     stations_with_fresh_input: int
+    # Whether any station of the region has ever been fitted for the served forecast family
+    # (a model row, active or not). A region never fitted has no forecasts to be missing;
+    # one whose models were all switched off still does, so it keeps alarming.
+    has_forecast_models: bool = True
 
 
-def issue_key(base: str, region_id: str, default_region_id: str) -> str:
+def issue_key(base: str, region_id: str, default_region_id: str = DEFAULT_REGION_ID) -> str:
     """The default region (Delhi NCR, the only region before 2026-10) keeps the bare
     key, so an issue already open at deploy is the same issue afterwards."""
     return base if region_id == default_region_id else f"{base}:{region_id}"
@@ -63,8 +72,7 @@ def issue_key(base: str, region_id: str, default_region_id: str) -> str:
 
 def all_issue_keys(region_ids: Sequence[str]) -> list[str]:
     """Every key evaluate_health can raise, for sending the "resolved" message."""
-    default = region_ids[0] if region_ids else ""
-    return [issue_key(b, r, default) for r in region_ids for b in _BASE_KEYS]
+    return [issue_key(b, r) for r in region_ids for b in _BASE_KEYS]
 
 
 def _age_hours(now: datetime, ts: datetime) -> float:
@@ -94,7 +102,7 @@ def _evaluate_region(now: datetime, r: RegionHealth, key, sensor_ingestion_enabl
             key("sensor-data-stale"), f"{r.name}: no new sensor readings while ingestion is enabled: newest {age}."
         ))
 
-    if sensor_ingestion_enabled and r.stations_with_current_forecast < min_forecast:
+    if sensor_ingestion_enabled and r.has_forecast_models and r.stations_with_current_forecast < min_forecast:
         cause = (
             "inputs are missing upstream" if r.stations_with_fresh_input < min_forecast
             else "inputs are fresh, so the forecast pipeline itself is failing"
@@ -114,9 +122,9 @@ def evaluate_health(
     sensor_ingestion_enabled: bool,
     default_region_id: str | None = None,
 ) -> list[Issue]:
-    """Issues across regions. The first region is the default (bare issue keys) unless
+    """Issues across regions. DEFAULT_REGION_ID keeps the bare issue keys unless another is
     named. A region with no active stations raises nothing: there is nothing to watch."""
-    default = default_region_id or (regions[0].region_id if regions else "")
+    default = default_region_id or DEFAULT_REGION_ID
     issues: list[Issue] = []
     for r in regions:
         if r.active_stations == 0:
