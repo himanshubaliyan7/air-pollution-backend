@@ -1,6 +1,8 @@
+from dataclasses import asdict
+
 from fastapi import APIRouter, HTTPException
 
-from api.schemas.regions import AqiCategoryOut, PollutantInfoOut, RegionOut
+from api.schemas.regions import AqiCategoryOut, PollutantInfoOut, RegionBacktestOut, RegionOut
 from common.constants import Pollutant
 from common.regions import Region, get_region, load_regions
 from models.exceedance import get_category_lower_bound
@@ -50,6 +52,7 @@ def _describe(region: Region) -> RegionOut:
             AqiCategoryOut(id=bp["category"], label=bp["category"].replace("_", " ").capitalize()) for bp in breakpoints
         ],
         health_threshold_category=thresholds["health_threshold_category"],
+        backtest=RegionBacktestOut(**asdict(region.backtest)) if region.backtest else None,
     )
 
 

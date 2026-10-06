@@ -47,8 +47,14 @@ too harsh, with recall and precision of no-go and of caution-or-worse, and how
 many real no-go days were called "go". The first line of each block is the
 last-24h mean itself. Nothing is written to the DB.
 
+--region (default delhi-ncr) keeps only that region's stations and reads its thresholds;
+--history-start and --fold (repeatable, START:END or NAME=START:END, test windows
+as local dates) replace the Delhi dates, which are the defaults, so another
+region can be scored on its own seasons.
+
 Run inside the Airflow scheduler container:
     sudo docker exec -i docker-airflow-scheduler-1 python - < scripts/daily_verdict_backtest.py 2> /dev/null
+    sudo docker exec -i docker-airflow-scheduler-1 python - --region mumbai --history-start 2026-01-01 --fold 2026-06-01:2026-09-15 < scripts/daily_verdict_backtest.py 2> /dev/null
     nohup sudo docker exec -i docker-airflow-scheduler-1 python - --models < scripts/daily_verdict_backtest.py > ~/daily_backtest.log 2>&1 &
 """
 
@@ -62,6 +68,7 @@ import pandas as pd
 from sqlalchemy import select
 
 from common.constants import Pollutant
+from common.regions import get_region, region_for_point
 from db.models import RawWeatherReading, Station
 from db.readings import hourly_readings
 from db.session import get_session
@@ -80,6 +87,7 @@ FOLDS = {
     "onset": (pd.Timestamp("2025-10-15"), pd.Timestamp("2025-11-30")),
     "winter": (pd.Timestamp("2026-01-15"), pd.Timestamp("2026-03-22")),
 }
+DEFAULT_REGION = "delhi-ncr"
 DAYS_AHEAD = (1, 2, 3, 4, 5)
 # No training row may see the test window: its label lies up to 5 days after
 # its own day, and a row after the window looks back 48 h.
@@ -153,14 +161,31 @@ def frame(variant, fold, k, station_ids, target_days, actual, level, values) -> 
     })
 
 
-def daily_weather(session, grid_cell_id: str, tz_name: str, cache: dict) -> pd.DataFrame:
+def parse_folds(specs: list[str]) -> dict:
+    """['NAME=START:END' or 'START:END', ...] -> {name: (start, end)}; no specs: the Delhi folds."""
+    if not specs:
+        return FOLDS
+    folds = {}
+    for spec in specs:
+        name, _, window = spec.rpartition("=")
+        start, sep, end = window.partition(":")
+        if not sep or not start or not end:
+            raise ValueError(f"fold {spec!r}: expected START:END or NAME=START:END")
+        start, end = pd.Timestamp(start), pd.Timestamp(end)
+        if end < start:
+            raise ValueError(f"fold {spec!r}: end is before start")
+        folds[name or f"{start:%Y-%m-%d}..{end:%Y-%m-%d}"] = (start, end)
+    return folds
+
+
+def daily_weather(session, grid_cell_id: str, tz_name: str, cache: dict, history_start: datetime) -> pd.DataFrame:
     """Mean wind speed and humidity per local day for one weather grid cell
     (index: the day's local midnight, naive)."""
     key = (grid_cell_id, tz_name)
     if key not in cache:
         rows = session.execute(
             select(RawWeatherReading.observed_at, RawWeatherReading.wind_speed, RawWeatherReading.relative_humidity)
-            .where(RawWeatherReading.grid_cell_id == grid_cell_id, RawWeatherReading.observed_at >= HISTORY_START,
+            .where(RawWeatherReading.grid_cell_id == grid_cell_id, RawWeatherReading.observed_at >= history_start,
                    RawWeatherReading.is_superseded.is_(False))
         ).all()
         if rows:
@@ -178,13 +203,27 @@ def daily_weather(session, grid_cell_id: str, tz_name: str, cache: dict) -> pd.D
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--models", action="store_true", help="also fit the pooled models (slow)")
-    with_models = parser.parse_args().models
+    parser.add_argument("--region", default=DEFAULT_REGION, help="region id; default: %(default)s")
+    parser.add_argument("--history-start", help="first day of history, YYYY-MM-DD; default: the Delhi start")
+    parser.add_argument("--fold", action="append", metavar="[NAME=]START:END",
+                        help="a test window of local dates; repeatable; default: the Delhi folds")
+    args = parser.parse_args()
+    with_models = args.models
+    region = get_region(args.region)
+    if region is None:
+        parser.error(f"unknown region {args.region!r}")
+    history_start = (datetime.fromisoformat(args.history_start).replace(tzinfo=timezone.utc)
+                     if args.history_start else HISTORY_START)
+    try:
+        folds = parse_folds(args.fold)
+    except ValueError as exc:
+        parser.error(str(exc))
     variants = VARIANTS if with_models else VARIANTS[:1]
     config = load_model_config()
     quantiles, params = sorted(config["quantiles"]), config["lightgbm"]["quantile"]
     pooled_params = {**params, "num_threads": POOLED_THREADS}
     min_rows = config["training"]["min_training_rows"]
-    thresholds = exceedance.load_thresholds()
+    thresholds = region.thresholds()
     order = [bp["category"] for bp in thresholds["pollutants"][POLLUTANT.value]["breakpoints"]]
     first = order.index(thresholds["health_threshold_category"])
     bands = order[first:]
@@ -193,13 +232,16 @@ def main() -> None:
     now = datetime.now(timezone.utc)
 
     session = get_session()
-    stations = session.execute(select(Station).where(Station.is_active.is_(True)).order_by(Station.station_id)).scalars().all()
+    stations = [
+        s for s in session.execute(select(Station).where(Station.is_active.is_(True)).order_by(Station.station_id)).scalars()
+        if (found := region_for_point(s.lat, s.lon)) is not None and found.id == region.id
+    ]
     loaded = []  # per station: (station_id, X, as_of_days, {k: labels}, {k: target-day weather})
     weather_cache: dict = {}
     for station in stations:
         tz_name = station_timezone(station)
-        features = read_features(session, station.station_id, POLLUTANT, HISTORY_START, now)
-        readings = hourly_readings(session, station.station_id, POLLUTANT, HISTORY_START, now)
+        features = read_features(session, station.station_id, POLLUTANT, history_start, now)
+        readings = hourly_readings(session, station.station_id, POLLUTANT, history_start, now)
         if features.empty or not readings:
             continue
         series = pd.Series([v for _, v in readings], index=pd.DatetimeIndex([t for t, _ in readings], tz="UTC"))
@@ -208,7 +250,7 @@ def main() -> None:
         if X.empty:
             continue
         as_of_days = local_days(X.index, tz_name)
-        weather = daily_weather(session, nearest_grid_cell_id(station.lat, station.lon), tz_name, weather_cache)
+        weather = daily_weather(session, nearest_grid_cell_id(station.lat, station.lon), tz_name, weather_cache, history_start)
         labels = {k: day_ahead_labels(X.index, day_means, tz_name, k) for k in DAYS_AHEAD}
         target_weather = {
             k: weather.reindex(as_of_days + pd.Timedelta(days=k))[TARGET_WEATHER].to_numpy(dtype="float64")
@@ -217,6 +259,8 @@ def main() -> None:
         loaded.append((station.station_id, X, as_of_days, labels, target_weather))
         print(f"{station.station_id} loaded", file=sys.stderr, flush=True)
     session.close()
+    if not loaded:
+        sys.exit(f"no active station of {region.id} has PM2.5 history since {history_start:%Y-%m-%d}")
 
     parts = []
     X_all = pd.concat([item[1] for item in loaded], ignore_index=True)
@@ -229,7 +273,7 @@ def main() -> None:
         X_weather = X_all.assign(**{f"target_day_{name}": weather[:, i] for i, name in enumerate(TARGET_WEATHER)})
         has_weather = ~np.isnan(weather).any(axis=1)
         target_days = as_of_all + np.timedelta64(k, "D")
-        for fold, (start, end) in FOLDS.items():
+        for fold, (start, end) in folds.items():
             # Every variant is scored on the same rows: those whose target day has weather.
             train, test = split(as_of_all, target_days, ~np.isnan(y) & has_weather, start.to_datetime64(), end.to_datetime64())
             if not test.any() or train.sum() < min_rows:
@@ -260,7 +304,7 @@ def main() -> None:
           ", ".join(f"{i + 1} = {c} (from {b:.0f})" for i, (c, b) in enumerate(zip(bands, bounds))) +
           f"; no-go from grade {no_go}; one row per station, target day and hour the forecast was made; "
           f"features left out: {', '.join(SEASON_FEATURES)}")
-    for fold, (start, end) in FOLDS.items():
+    for fold, (start, end) in folds.items():
         f = df[df.fold == fold]
         if f.empty:
             print(f"\n== {fold}: no data")

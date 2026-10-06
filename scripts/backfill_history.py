@@ -7,9 +7,10 @@ Fetches in day-sized chunks (both to keep individual API requests small -
 OpenAQ pagination and CDS request size limits - and so a failure partway
 through a multi-month backfill doesn't lose already-fetched days).
 
-Usage:
+Usage (in the container pipe the file instead: python - --days 180 < scripts/backfill_history.py):
     python -m scripts.backfill_history --days 180
     python -m scripts.backfill_history --days 180 --skip-weather   # OpenAQ only
+    python -m scripts.backfill_history --days 30 --region mumbai   # OpenAQ API, that region's stations; no weather
     python -m scripts.backfill_history --weather-only --start 2025-09-25 --end 2026-03-01
         # ERA5 for a fixed window (sensor history for old windows: scripts.backfill_archive)
 """
@@ -21,6 +22,7 @@ from datetime import date, datetime, timedelta, timezone
 from common.config import get_settings
 from common.constants import Pollutant
 from common.logging_conf import configure_logging
+from common.regions import select_stations
 from db.session import get_session
 from ingestion.config import ACTIVE_SOURCE, SENSOR_SOURCE_REGISTRY
 from ingestion.loaders.sensor_loader import load_sensor_readings
@@ -32,7 +34,7 @@ from orchestration.plugins.common.tasks import _active_stations
 logger = logging.getLogger(__name__)
 
 
-def backfill_sensor_readings(days: int, chunk_days: int = 30) -> int:
+def backfill_sensor_readings(days: int, chunk_days: int = 30, region_id: str | None = None) -> int:
     """chunk_days is a resilience checkpoint (a failure partway through only
     loses one chunk's progress), not a pagination necessity - OpenAQSource's
     own _paginate already handles arbitrarily long date ranges via the
@@ -48,7 +50,7 @@ def backfill_sensor_readings(days: int, chunk_days: int = 30) -> int:
         source_cls = SENSOR_SOURCE_REGISTRY[ACTIVE_SOURCE]
         source = source_cls(api_key=settings.openaq_api_key)
 
-        stations = _active_stations(session)
+        stations = select_stations(_active_stations(session), region_id)
         if not stations:
             logger.warning("No active stations - run scripts/seed_stations.py first")
             return 0
@@ -100,13 +102,17 @@ def main() -> None:
     parser.add_argument("--weather-only", action="store_true", help="Skip the OpenAQ API backfill")
     parser.add_argument("--start", type=date.fromisoformat, help="weather window start (with --end), UTC date")
     parser.add_argument("--end", type=date.fromisoformat, help="weather window end, exclusive")
+    parser.add_argument("--region", help="only stations inside this region (config/regions.yaml id)")
     args = parser.parse_args()
 
     if not args.weather_only:
-        n_sensor = backfill_sensor_readings(args.days)
+        n_sensor = backfill_sensor_readings(args.days, region_id=args.region)
         logger.info("Backfilled %d sensor readings", n_sensor)
 
-    if not args.skip_weather:
+    if args.region not in (None, "delhi-ncr") and not args.skip_weather:
+        # ERA5 is fetched for the Delhi NCR area only (DELHI_NCR_AREA); another region has no weather.
+        logger.warning("No weather backfill for region %s (Delhi NCR area only); skipping ERA5", args.region)
+    elif not args.skip_weather:
         as_utc = lambda d: datetime(d.year, d.month, d.day, tzinfo=timezone.utc) if d else None
         n_weather = backfill_weather(args.days, start=as_utc(args.start), end=as_utc(args.end))
         logger.info("Backfilled %d weather readings", n_weather)

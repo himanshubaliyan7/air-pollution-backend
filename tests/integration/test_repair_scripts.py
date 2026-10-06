@@ -217,3 +217,31 @@ def test_fix_station_coordinates_moves_name_matched_stations_and_guards_the_weat
     assert coordinates()["openaq:5570"] == (28.4706914, 77.1099364)
     again = fix(db_session, feed, apply=True, allow_grid_change=True)
     assert again["moved"] == [] and again["skipped"] == []  # nothing left to correct
+
+
+def test_retrain_report_shows_the_level_floor_per_region_without_changing_anything(db_session, monkeypatch, capsys):
+    """Report-only mode of the daily_mean family says which region/pollutant/day-ahead
+    fits fail the floor and how many active ratio rows that would deactivate."""
+    from common.constants import ForecastTarget
+    from db.models import ModelRun
+    from models import level
+    from models.train import load_model_config
+    from scripts import retrain_models
+    from tests.integration.forecast_helpers import add_model_run, add_station
+
+    sid = add_station(db_session, "Delhi one")
+    add_model_run(db_session, sid, Pollutant.PM25, 24)  # one active row at the failing fit
+    config = load_model_config()
+    config["training"] = {**config["training"], "min_level_days": 180, "min_level_stations": 3}
+    monkeypatch.setattr(retrain_models, "load_model_config", lambda: config)
+
+    def fake_fit(session, pollutant, start, end, quantiles, region_id=None):
+        return {24: level.Fit({0.5: 0.1}, 5000, 200, 4), 48: level.Fit({0.5: 0.1}, 5000, 120, 4)}
+
+    monkeypatch.setattr(level, "fit_log_ratio_quantiles", fake_fit)
+    retrain_models.retrain(db_session, False, [Pollutant.PM25], None, target=ForecastTarget.DAILY_MEAN, region_id="delhi-ncr")
+    out = capsys.readouterr().out
+    assert "delhi-ncr pm25 day 1: 200 days, 4 stations, 5000 rows (floor 180 / 3 / 100) PASS" in out
+    assert "delhi-ncr pm25 day 2: 120 days, 4 stations" in out and "FAIL - would deactivate 0 active rows" in out
+    assert "day 5: 0 days, 0 stations" in out and "FAIL" in out
+    assert db_session.query(ModelRun).filter_by(is_active=True).count() == 1  # report-only wrote nothing

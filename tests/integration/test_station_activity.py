@@ -68,6 +68,25 @@ def test_refresh_refuses_empty_answer(db_session, monkeypatch):
     assert db_session.query(Station).one().is_active is True
 
 
+def test_refresh_queries_only_regions_that_have_stations(db_session, monkeypatch):
+    """Delhi-only deploy: the unseeded Mumbai region must not be queried (its empty
+    answer would fail the task)."""
+    from orchestration.plugins.common import tasks
+
+    db_session.add(_station("live"))
+    db_session.commit()
+    boxes = []
+
+    class _Recording(_FakeSource):
+        def location_last_data_times(self, bbox=None, **_):
+            boxes.append(bbox)
+            return self._last_seen if bbox[0] > 74 else {}  # Mumbai (lon 72.7) would answer empty
+
+    monkeypatch.setitem(tasks.SENSOR_SOURCE_REGISTRY, tasks.ACTIVE_SOURCE, _Recording({"live": NOW}))
+    assert tasks.refresh_station_activity() == {"deactivated": 0, "reactivated": 0}
+    assert len(boxes) == 1
+
+
 def test_api_lists_current_forecast_stations_first_and_stale_forecast_is_no_data(db_session):
     from tests.integration.test_api import _seed_station_and_forecast  # noqa: PLC0415
     from api.main import app
@@ -144,7 +163,7 @@ def test_regions_endpoint_and_station_region_and_local_day(db_session):
 
     client = TestClient(app)
     regions = client.get("/api/v1/regions").json()
-    assert [r["id"] for r in regions] == ["delhi-ncr"]
+    assert [r["id"] for r in regions] == ["delhi-ncr", "mumbai"]
     r = regions[0]
     assert r["timezone"] == "Asia/Kolkata" and r["aqi_standard"] == "CPCB National AQI"
     assert [c["id"] for c in r["aqi_categories"]] == ["good", "satisfactory", "moderate", "poor", "very_poor", "severe"]

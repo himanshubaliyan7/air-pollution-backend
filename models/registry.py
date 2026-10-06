@@ -105,6 +105,23 @@ def activate_model(session: Session, model_id: uuid.UUID) -> None:
     session.commit()
 
 
+def deactivate_level_models(session: Session, station_id: str, pollutant: Pollutant, horizon_hours: int) -> int:
+    """Switch off the station's daily-mean level-ratio rows for one horizon, so a
+    fit that is no longer supported is not served (no active rows = no forecast).
+    Returns how many were active."""
+    result = session.execute(
+        update(ModelRun)
+        .where(
+            ModelRun.station_id == station_id, ModelRun.pollutant == pollutant, ModelRun.horizon_hours == horizon_hours,
+            ModelRun.target == ForecastTarget.DAILY_MEAN.value, ModelRun.is_active.is_(True),
+            ModelRun.hyperparams["kind"].astext == "level_ratio",
+        )
+        .values(is_active=False)
+    )
+    session.commit()
+    return result.rowcount
+
+
 def promote_if_better(
     session: Session,
     *,

@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from common.config import forecast_target, get_settings, load_yaml_config
 from common.constants import ForecastTarget, ModelType, Pollutant
+from common.regions import region_for_point
 from db.models import ModelRun, Station
 from db.readings import hourly_readings
 from features.feature_store import get_feature_set_version, read_features
@@ -99,16 +100,37 @@ def build_training_matrix(
     return X, y
 
 
+def _level_fit_is_sufficient(fit: level.Fit | None, training: dict) -> bool:
+    """Enough labelled rows, local days and stations for the region's ratios to
+    mean something. Rows alone are not enough: hourly rows of a few stations
+    over a few weeks are strongly correlated."""
+    return (fit is not None and fit.rows >= training["min_training_rows"]
+            and fit.days >= training.get("min_level_days", 0) and fit.stations >= training.get("min_level_stations", 0))
+
+
 def _train_level(session, station_id, pollutant, horizon_hours, window_start, window_end) -> list:
     """The daily-mean family (models/level.py): register this station's copy of
-    the pooled ratio quantiles and activate it. Nothing is compared: the rule
-    has no fitted state that a newer fit could make worse."""
+    its region's ratio quantiles and activate it. Nothing is compared: the rule
+    has no fitted state that a newer fit could make worse.
+
+    Without a fit the region's data supports (too little history, or a station
+    outside every region) nothing is registered and the station's old level
+    rows are deactivated: an old fit is never served, and no ratios are ever
+    borrowed from another region. No active rows reads as no-data."""
     config = load_model_config()
-    fitted = level.fit_log_ratio_quantiles(session, pollutant, window_start, window_end, sorted(config["quantiles"]))
-    if horizon_hours not in fitted or fitted[horizon_hours][1] < config["training"]["min_training_rows"]:
-        logger.warning("Not enough labelled rows for the %s level ratio at %dh - skipping", pollutant.value, horizon_hours)
+    station = session.get(Station, station_id)
+    region = region_for_point(station.lat, station.lon) if station is not None else None
+    fit = None
+    if region is not None:
+        fit = level.fit_log_ratio_quantiles(
+            session, pollutant, window_start, window_end, sorted(config["quantiles"]), region.id).get(horizon_hours)
+    if not _level_fit_is_sufficient(fit, config["training"]):
+        logger.warning("Not enough history for the %s level ratio at %dh (%s: %s) - registering nothing and "
+                       "deactivating %s's old ratios", pollutant.value, horizon_hours, station_id,
+                       region.id if region else "outside every region", station_id)
+        registry.deactivate_level_models(session, station_id, pollutant, horizon_hours)
         return []
-    ratios, n_rows = fitted[horizon_hours]
+    ratios, n_rows = fit.quantiles, fit.rows
     trained_at = datetime.now(timezone.utc)
     ids = []
     for q, value in ratios.items():
@@ -117,13 +139,14 @@ def _train_level(session, station_id, pollutant, horizon_hours, window_start, wi
             model_type=ModelType.QUANTILE_REGRESSOR, feature_set_version=get_feature_set_version(),
             artifact_path=f"{level.KIND}:{pollutant.value}:{horizon_hours}h:q{q}", trained_at=trained_at,
             training_window_start=window_start, training_window_end=window_end,
-            metrics={"rows": n_rows}, hyperparams={"kind": level.KIND, "log_ratio": value, "pooled": True},
+            metrics={"rows": n_rows, "days": fit.days, "stations": fit.stations},
+            hyperparams={"kind": level.KIND, "log_ratio": value, "pooled": True, "region": region.id},
             quantile=q, target=ForecastTarget.DAILY_MEAN,
         )
         registry.activate_model(session, model_id)
         ids.append(model_id)
-    logger.info("Level %s/%s/%dh: log ratios %s from %d rows", station_id, pollutant.value, horizon_hours,
-                {q: round(v, 3) for q, v in ratios.items()}, n_rows)
+    logger.info("Level %s/%s/%dh (%s): log ratios %s from %d rows, %d days, %d stations", station_id, pollutant.value,
+                horizon_hours, region.id, {q: round(v, 3) for q, v in ratios.items()}, n_rows, fit.days, fit.stations)
     return ids
 
 
@@ -166,7 +189,9 @@ def train_station_pollutant_horizon(
 
     trained_at = datetime.now(timezone.utc)
     feature_set_version = get_feature_set_version()
-    thresholds = exceedance.load_thresholds()
+    station = session.get(Station, station_id)
+    thresholds = (exceedance.thresholds_for_point(station.lat, station.lon) if station is not None
+                  else exceedance.load_thresholds())
     threshold_conc = exceedance.get_health_threshold_concentration(pollutant, thresholds)
 
     registered_ids = []

@@ -11,6 +11,17 @@ from common.config import get_settings, load_yaml_config
 
 
 @dataclass(frozen=True)
+class RegionBacktest:
+    """Forecast accuracy measured for a region (optional `backtest` block in regions.yaml)."""
+
+    period: str
+    exact_grade_tomorrow: float  # share of days graded exactly right, 0-1
+    exact_grade_day_5: float
+    no_go_called_go_low: float  # share of No-go days wrongly called Go: low and high ends
+    no_go_called_go_high: float
+
+
+@dataclass(frozen=True)
 class Region:
     id: str
     name: str
@@ -19,6 +30,7 @@ class Region:
     bbox: tuple[float, float, float, float]  # min_lon, min_lat, max_lon, max_lat
     aqi_standard: str
     thresholds_config: str
+    backtest: RegionBacktest | None = None  # None until the region has been backtested
 
     def contains(self, lat: float, lon: float) -> bool:
         min_lon, min_lat, max_lon, max_lat = self.bbox
@@ -34,6 +46,22 @@ class Region:
         return load_yaml_config(get_settings().thresholds_config_path.parent / self.thresholds_config)
 
 
+def _parse_backtest(region_id: str, raw: dict | None) -> RegionBacktest | None:
+    if not raw:
+        return None
+    backtest = RegionBacktest(
+        period=str(raw["period"]),
+        exact_grade_tomorrow=float(raw["exact_grade_tomorrow"]),
+        exact_grade_day_5=float(raw["exact_grade_day_5"]),
+        no_go_called_go_low=float(raw["no_go_called_go_low"]),
+        no_go_called_go_high=float(raw["no_go_called_go_high"]),
+    )
+    for name in ("exact_grade_tomorrow", "exact_grade_day_5"):
+        if not 0.0 <= getattr(backtest, name) <= 1.0:
+            raise ValueError(f"region {region_id}: backtest.{name} must be between 0 and 1")
+    return backtest
+
+
 @lru_cache
 def load_regions() -> tuple[Region, ...]:
     path = get_settings().thresholds_config_path.parent / "regions.yaml"
@@ -41,7 +69,7 @@ def load_regions() -> tuple[Region, ...]:
         Region(
             id=r["id"], name=r["name"], country=r["country"], timezone=r["timezone"],
             bbox=tuple(float(x) for x in r["bbox"]), aqi_standard=r["aqi_standard"],
-            thresholds_config=r["thresholds_config"],
+            thresholds_config=r["thresholds_config"], backtest=_parse_backtest(r["id"], r.get("backtest")),
         )
         for r in load_yaml_config(path)["regions"]
     )
@@ -56,3 +84,15 @@ def region_for_point(lat: float, lon: float) -> Region | None:
 
 def get_region(region_id: str) -> Region | None:
     return next((r for r in load_regions() if r.id == region_id), None)
+
+
+def select_stations(stations, region_id: str | None = None, station_ids: list[str] | None = None) -> list:
+    """Stations inside a region's bbox and/or with one of the given station ids."""
+    if region_id is not None:
+        region = get_region(region_id)
+        if region is None:
+            raise ValueError(f"unknown region {region_id!r}")
+        stations = [s for s in stations if region.contains(s.lat, s.lon)]
+    if station_ids:
+        stations = [s for s in stations if s.station_id in set(station_ids)]
+    return list(stations)

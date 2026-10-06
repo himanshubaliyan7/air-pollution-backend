@@ -19,10 +19,18 @@ import pandas as pd
 
 from common.config import get_settings, load_yaml_config, to_ist
 from common.constants import Pollutant
+from common.regions import region_for_point
 
 
 def load_thresholds() -> dict:
     return load_yaml_config(get_settings().thresholds_config_path)
+
+
+def thresholds_for_point(lat: float, lon: float) -> dict:
+    """The AQI thresholds of the region a station at this point lies in; the
+    global file only for a point outside every region."""
+    region = region_for_point(lat, lon)
+    return region.thresholds() if region else load_thresholds()
 
 
 def get_category_lower_bound(thresholds: dict, pollutant: Pollutant, category: str) -> float:

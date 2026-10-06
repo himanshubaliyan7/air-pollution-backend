@@ -114,7 +114,11 @@ def test_cpcb_no2_labelled_ppb_is_kept_as_ug_m3():
     feed matches the raw number); converting them overstated NO2 by 1.88x."""
     responses = {
         "/locations/111": FakeResponse(
-            {"id": 111, "sensors": [{"id": 9002, "parameter": {"name": "no2", "units": "ppb"}}]}
+            {
+                "id": 111,
+                "coordinates": {"latitude": 28.6, "longitude": 77.2},  # inside Delhi NCR, where the rule was verified
+                "sensors": [{"id": 9002, "parameter": {"name": "no2", "units": "ppb"}}],
+            }
         ),
         "/sensors/9002/hours": FakeResponse(
             {
@@ -143,9 +147,19 @@ def test_cpcb_no2_labelled_ppb_is_kept_as_ug_m3():
 
 
 def test_only_the_known_mislabel_is_corrected():
-    assert declared_unit(Pollutant.NO2, "ppb") == CANONICAL_UNIT
+    assert declared_unit(Pollutant.NO2, "ppb", 28.6, 77.2) == CANONICAL_UNIT
     assert declared_unit(Pollutant.NO2, "µg/m³") == "µg/m³"
     assert declared_unit(Pollutant.PM25, "ppb") == "ppb"  # still dropped by the loader, not relabelled
+
+
+def test_mislabel_rule_has_a_margin_around_the_verified_region():
+    """Rohtak/Dharuhera/Bhiwadi sit ~0.01 degree inside the Delhi bbox edge; OpenAQ's
+    coordinates for them can land just outside it and must still get the rule."""
+    assert declared_unit(Pollutant.NO2, "ppb", 28.19, 76.59) == CANONICAL_UNIT  # just outside the bbox corner
+    assert declared_unit(Pollutant.NO2, "ppb", 28.10, 76.50) == CANONICAL_UNIT  # 0.1 degree outside
+    assert declared_unit(Pollutant.NO2, "ppb", 19.06, 72.86) is None  # Mumbai: unverified, skipped
+    assert declared_unit(Pollutant.NO2, "ppb", 27.0, 77.2) is None  # 1.2 degrees south of the margin
+    assert declared_unit(Pollutant.NO2, "ppb") is None  # no coordinates
 
 
 def test_fetch_readings_skips_a_sensor_that_persistently_5xxs_without_crashing():
@@ -394,3 +408,18 @@ def test_rejected_api_key_fails_loudly_instead_of_being_skipped_per_station():
             start=datetime(2026, 9, 20, 12, tzinfo=timezone.utc), end=datetime(2026, 9, 20, 14, tzinfo=timezone.utc),
         )
     assert len(session.calls) == 1  # no retries, and it did not carry on to the next station
+
+
+def test_fetch_raw_hours_keeps_the_label_openaq_gives_and_costs_three_requests():
+    """The unit check needs the NO2 hours the ingestion would skip (Mumbai, "ppb")."""
+    hour = {"value": 12.0, "parameter": {"units": "ppb"}, "period": {"datetimeFrom": {"utc": "2026-10-07T00:30:00Z"}}}
+    session = FakeSession({
+        "/locations/501": FakeResponse({"id": 501, "coordinates": {"latitude": 19.06, "longitude": 72.86}, "sensors": [
+            {"id": 1, "parameter": {"name": "no2"}}, {"id": 2, "parameter": {"name": "pm25"}}]}),
+        "/sensors/1/hours": FakeResponse({"meta": {"found": 1}, "results": [hour]}),
+        "/sensors/2/hours": FakeResponse({"meta": {"found": 0}, "results": []}),
+    })
+    source = OpenAQSource(api_key="k", session=session)
+    out = source.fetch_raw_hours("501", [Pollutant.NO2, Pollutant.PM25], datetime(2026, 10, 7, tzinfo=timezone.utc), datetime(2026, 10, 8, tzinfo=timezone.utc))
+    assert out == {Pollutant.NO2: [(datetime(2026, 10, 7, 0, 0, tzinfo=timezone.utc), 12.0, "ppb")], Pollutant.PM25: []}
+    assert len(session.calls) == 3

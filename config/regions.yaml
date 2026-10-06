@@ -14,3 +14,21 @@ regions:
     bbox: [76.6, 28.2, 77.6, 29.0]  # min_lon, min_lat, max_lon, max_lat
     aqi_standard: CPCB National AQI
     thresholds_config: thresholds_cpcb.yaml  # relative to this directory
+    # Optional: measured forecast accuracy, shown by the frontend per region. Leave it out
+    # until the region has been backtested - a missing block reads as "not measured".
+    # Delhi: onset window 2025-10-15 to 2025-11-30 (docs/PROJECT_HANDOFF.md).
+    backtest:
+      period: 2025-10-15 to 2025-11-30
+      exact_grade_tomorrow: 0.61
+      exact_grade_day_5: 0.52
+      no_go_called_go_low: 0.02   # share of No-go days called Go, low and high ends
+      no_go_called_go_high: 0.05
+  - id: mumbai
+    name: Mumbai
+    country: IN
+    timezone: Asia/Kolkata
+    # The Mumbai Metropolitan Region: Mumbai, Navi Mumbai, Thane, Kalyan-Dombivli, Vasai-Virar.
+    # Holds all 43 stations CPCB's feed listed there on 2026-10-06, and stays clear of Pune.
+    bbox: [72.70, 18.80, 73.35, 19.55]
+    aqi_standard: CPCB National AQI
+    thresholds_config: thresholds_cpcb.yaml

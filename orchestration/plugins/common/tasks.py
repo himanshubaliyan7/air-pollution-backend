@@ -6,6 +6,7 @@ logging, so the DAG files themselves stay declarative.
 """
 
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, func, select
@@ -13,6 +14,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from common.config import forecast_target, get_settings
 from common.freshness import floor_hour, is_input_fresh, is_reading_current
+from common.regions import load_regions, region_for_point
 from common.constants import (
     DEFAULT_HORIZONS_HOURS,
     ForecastTarget,
@@ -41,6 +43,11 @@ from alerting.retention import purge_subscriptions
 from models import evaluation, exceedance, predict, registry, train
 from models.daily import local_day_means, target_day_start
 from models.outlook import station_timezone
+from orchestration.plugins.common.regional import (
+    drift_by_region,
+    group_by_region,
+    thresholds_for_station,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +67,7 @@ SENSOR_LOOKBACK_HOURS = 72
 
 
 def ingest_sensor_readings(lookback_hours: int = SENSOR_LOOKBACK_HOURS) -> int:
+    started = time.monotonic()
     session = get_session()
     try:
         settings = get_settings()
@@ -79,7 +87,11 @@ def ingest_sensor_readings(lookback_hours: int = SENSOR_LOOKBACK_HOURS) -> int:
             start=start,
             end=end,
         )
-        return load_sensor_readings(session, readings, ACTIVE_SOURCE)
+        written = load_sensor_readings(session, readings, ACTIVE_SOURCE)
+        # Runtime grows with the station count (OpenAQ is paced at 60 requests/min); the
+        # DAGs are chained by clock offsets, so this is the number to watch as regions are added.
+        logger.info("Sensor ingestion: %d stations, %d rows, %.0fs", len(stations), written, time.monotonic() - started)
+        return written
     finally:
         session.close()
 
@@ -212,12 +224,15 @@ def ingestion_data_quality_check(sensor_rows: int, weather_rows: int) -> None:
     finally:
         session.close()
 
-    if stations:
-        ages = summarize_data_age({s.station_id: newest.get(s.station_id) for s in stations}, datetime.now(timezone.utc))
-        logger.info("Active stations by age of newest reading: %s (of %d)", ages, len(stations))
+    # Per region: one city going dark must not hide behind another's fresh readings.
+    now = datetime.now(timezone.utc)
+    for region_name, region_stations in group_by_region(stations).items():
+        ages = summarize_data_age({s.station_id: newest.get(s.station_id) for s in region_stations}, now)
+        logger.info("%s: active stations by age of newest reading: %s (of %d)", region_name, ages, len(region_stations))
         if ages["<=6h"] == 0:
             logger.warning(
-                "No active station has a reading newer than %dh - no forecasts can be generated", MAX_INPUT_STALENESS_HOURS
+                "%s: no active station has a reading newer than %dh - no forecasts can be generated",
+                region_name, MAX_INPUT_STALENESS_HOURS,
             )
 
     if stations and sensor_rows == 0 and weather_rows == 0:
@@ -242,16 +257,27 @@ def refresh_station_activity(max_dark_days: int = MAX_DARK_DAYS) -> dict[str, in
     reactivates any that have resumed. Dark stations otherwise cost several API
     calls per hourly ingestion run for nothing (39 of 124 Delhi NCR locations had
     been dark for 30+ days, verified 2026-09-20)."""
-    from ingestion.config import DELHI_NCR_BBOX, DELHI_NCR_COUNTRY_ISO
-
     session = get_session()
     try:
         source = SENSOR_SOURCE_REGISTRY[ACTIVE_SOURCE](api_key=get_settings().openaq_api_key)
-        last_seen = source.location_last_data_times(bbox=DELHI_NCR_BBOX, country=DELHI_NCR_COUNTRY_ISO)
-        if not last_seen:
-            # An empty answer means the call misbehaved, not that every
-            # station vanished - never deactivate the whole network on that.
-            raise RuntimeError("OpenAQ returned no locations; refusing to change station activity")
+        last_seen: dict = {}
+        failed: list[str] = []
+        stations = session.execute(select(Station)).scalars().all()
+        # A region with no station rows yet (not seeded) is not queried: OpenAQ's answer
+        # for it would be empty and fail the task for nothing.
+        seeded = {r.id for s in stations if (r := region_for_point(s.lat, s.lon)) is not None}
+        for region in (r for r in load_regions() if r.id in seeded):
+            try:
+                answer = source.location_last_data_times(bbox=region.bbox, country=region.country)
+            except Exception as exc:  # noqa: BLE001 - one region failing must not stop the others
+                logger.warning("OpenAQ location query for %s failed: %s", region.name, exc)
+                answer = None
+            if not answer:
+                # An empty answer means the call misbehaved, not that every station of
+                # the region vanished - never deactivate a region's network on that.
+                failed.append(region.id)
+            else:
+                last_seen.update(answer)
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=max_dark_days)
         # A station OpenAQ lists as dark can still have a current CPCB reading from
@@ -264,7 +290,10 @@ def refresh_station_activity(max_dark_days: int = MAX_DARK_DAYS) -> dict[str, in
             ).scalars()
         )
         deactivated = reactivated = 0
-        for station in session.execute(select(Station)).scalars().all():
+        for station in stations:
+            region = region_for_point(station.lat, station.lon)
+            if region is not None and region.id in failed:
+                continue  # its region's query failed: no answer is not "dark"
             if station.source_location_id not in last_seen:
                 continue  # unknown to OpenAQ this time; leave as is
             newest = last_seen[station.source_location_id]
@@ -277,6 +306,8 @@ def refresh_station_activity(max_dark_days: int = MAX_DARK_DAYS) -> dict[str, in
                 reactivated += 1
         session.commit()
         logger.info("Station activity refreshed: %d deactivated, %d reactivated", deactivated, reactivated)
+        if failed:  # after committing the regions that did answer
+            raise RuntimeError(f"OpenAQ returned no locations for {', '.join(failed)}; left their stations unchanged")
         return {"deactivated": deactivated, "reactivated": reactivated}
     finally:
         session.close()
@@ -336,7 +367,7 @@ def generate_forecasts(target: ForecastTarget | None = None) -> dict:
     session = get_session()
     try:
         stations = _active_stations(session)
-        thresholds = exceedance.load_thresholds()
+        thresholds_cache: dict = {}
         now = datetime.now(timezone.utc)
 
         latest_reading = {
@@ -355,6 +386,7 @@ def generate_forecasts(target: ForecastTarget | None = None) -> dict:
         new_crossings: list[dict] = []
         for station in stations:
             tz_name = station_timezone(station)
+            thresholds = thresholds_for_station(station, thresholds_cache)
             for pollutant in Pollutant:
                 as_of = forecast_anchor(latest_reading.get((station.station_id, pollutant)), now)
                 if as_of is None:
@@ -478,7 +510,7 @@ def evaluate_recent_forecasts(evaluation_window_days: int = 1) -> int:
 
     session = get_session()
     try:
-        thresholds = exceedance.load_thresholds()
+        thresholds_cache: dict = {}
         stations = _active_stations(session)
         now = datetime.now(timezone.utc)
         window_start = now - timedelta(days=evaluation_window_days)
@@ -489,6 +521,7 @@ def evaluate_recent_forecasts(evaluation_window_days: int = 1) -> int:
 
         written = 0
         for station in stations:
+            thresholds = thresholds_for_station(station, thresholds_cache)
             for pollutant in Pollutant:
                 threshold_conc = exceedance.get_health_threshold_concentration(pollutant, thresholds)
 
@@ -552,7 +585,7 @@ def evaluate_recent_forecasts(evaluation_window_days: int = 1) -> int:
 
 
 # The daily-mean family (a fixed rule, not a trained model) is judged on a week
-# of day-ahead verdicts over all stations: the share of days above the health
+# of day-ahead verdicts over each region's stations: the share of days above the health
 # threshold that had been flagged. Backtests put it near 0.9 at the season's
 # onset; one calm week has too few such days to say anything.
 DAILY_DRIFT_WINDOW = timedelta(days=7)
@@ -567,24 +600,26 @@ def daily_verdict_drift(session, now: datetime) -> str | None:
     above the health threshold, else None."""
     from db.models import ExceedanceEvaluation
 
-    rows = [
-        (n_actual, recall)
-        for n_actual, recall in session.execute(
-            select(ExceedanceEvaluation.n_exceedance_days_actual, ExceedanceEvaluation.recall)
-            .join(ModelRun, ModelRun.model_id == ExceedanceEvaluation.model_id)
-            .where(
-                ModelRun.target == ForecastTarget.DAILY_MEAN.value,
-                ExceedanceEvaluation.horizon_hours == DAILY_DRIFT_HORIZON_HOURS,
-                ExceedanceEvaluation.computed_at >= now - DAILY_DRIFT_WINDOW,
-            )
-        ).all()
-    ]
-    if not evaluation.missed_days_drift(rows, DAILY_DRIFT_MIN_RECALL, DAILY_DRIFT_MIN_DAYS):
+    rows = session.execute(
+        select(Station.lat, Station.lon, ExceedanceEvaluation.n_exceedance_days_actual, ExceedanceEvaluation.recall)
+        .join(ModelRun, ModelRun.model_id == ExceedanceEvaluation.model_id)
+        .join(Station, Station.station_id == ExceedanceEvaluation.station_id)
+        .where(
+            ModelRun.target == ForecastTarget.DAILY_MEAN.value,
+            ExceedanceEvaluation.horizon_hours == DAILY_DRIFT_HORIZON_HOURS,
+            ExceedanceEvaluation.computed_at >= now - DAILY_DRIFT_WINDOW,
+        )
+    ).all()
+    drifted = drift_by_region(rows, DAILY_DRIFT_MIN_RECALL, DAILY_DRIFT_MIN_DAYS)
+    if not drifted:
         return None
-    recall, days = evaluation.pooled_recall(rows)
+    detail = "; ".join(
+        f"{name}: only {recall:.0%} of the {days} station-days above the health threshold were flagged a day ahead"
+        for name, recall, days in drifted
+    )
     return (
-        f"Daily verdict check failed: over the last {DAILY_DRIFT_WINDOW.days} days only {recall:.0%} of the {days} "
-        f"station-days above the health threshold were flagged a day ahead (floor {DAILY_DRIFT_MIN_RECALL:.0%}). "
+        f"Daily verdict check failed over the last {DAILY_DRIFT_WINDOW.days} days (floor {DAILY_DRIFT_MIN_RECALL:.0%}) - "
+        f"{detail}. "
         "The level rule follows the last 24 h, so a sharp rise is missed for a day; if this persists, "
         "lower daily_mean_decision_probability in config/thresholds_cpcb.yaml."
     )

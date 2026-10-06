@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class AqiCategoryOut(BaseModel):
@@ -17,6 +17,17 @@ class PollutantInfoOut(BaseModel):
     threshold_averaging: str | None
 
 
+class RegionBacktestOut(BaseModel):
+    """How well the daily verdicts matched what happened, measured on past days."""
+
+    period: str  # the days graded, e.g. "2025-10-15 to 2025-11-30"
+    exact_grade_tomorrow: float = Field(ge=0, le=1)  # share of days graded exactly right, tomorrow
+    exact_grade_day_5: float = Field(ge=0, le=1)  # same, five days ahead
+    # Share of real No-go days the forecast called Go; the range is the low and high ends measured.
+    no_go_called_go_low: float
+    no_go_called_go_high: float
+
+
 class RegionOut(BaseModel):
     id: str
     name: str
@@ -28,3 +39,6 @@ class RegionOut(BaseModel):
     pollutant_details: list[PollutantInfoOut]  # per pollutant: unit and health-threshold concentration
     aqi_categories: list[AqiCategoryOut]  # ordered best -> worst
     health_threshold_category: str  # category at/above which outdoor practice is not recommended
+    # Forecast accuracy measured for this region; null until it has been backtested
+    # (show "not yet measured", never another region's numbers).
+    backtest: RegionBacktestOut | None = None

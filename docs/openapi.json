@@ -1895,6 +1895,44 @@
         ],
         "title": "PollutantInfoOut"
       },
+      "RegionBacktestOut": {
+        "properties": {
+          "period": {
+            "type": "string",
+            "title": "Period"
+          },
+          "exact_grade_tomorrow": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Exact Grade Tomorrow"
+          },
+          "exact_grade_day_5": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Exact Grade Day 5"
+          },
+          "no_go_called_go_low": {
+            "type": "number",
+            "title": "No Go Called Go Low"
+          },
+          "no_go_called_go_high": {
+            "type": "number",
+            "title": "No Go Called Go High"
+          }
+        },
+        "type": "object",
+        "required": [
+          "period",
+          "exact_grade_tomorrow",
+          "exact_grade_day_5",
+          "no_go_called_go_low",
+          "no_go_called_go_high"
+        ],
+        "title": "RegionBacktestOut",
+        "description": "How well the daily verdicts matched what happened, measured on past days."
+      },
       "RegionOut": {
         "properties": {
           "id": {
@@ -1948,6 +1986,16 @@
           "health_threshold_category": {
             "type": "string",
             "title": "Health Threshold Category"
+          },
+          "backtest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RegionBacktestOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",

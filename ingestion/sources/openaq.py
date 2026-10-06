@@ -18,11 +18,13 @@ stay within OpenAQ's per-key rate limits.
 
 import logging
 import time
+from collections import Counter
 from datetime import datetime, timezone
 
 import requests
 
 from common.constants import Pollutant, SensorSourceName
+from common.regions import get_region
 from ingestion.sources.base import SensorReading, SensorSource, StationMetadata
 from ingestion.units import CANONICAL_UNIT
 
@@ -41,13 +43,44 @@ _PARAMETER_NAME_TO_POLLUTANT = {p.value: p for p in Pollutant}
 # the raw number (ratio 1.00) and not the ppb-converted one (0.531 = 1/1.882),
 # at all 69 stations checked (scripts/cpcb_subindex_study.py, 2026-10-01).
 # Every NO2 sensor in the Delhi NCR bbox is on that network, including those
-# OpenAQ lists under provider "N/A". Re-verify before ingesting another country.
+# OpenAQ lists under provider "N/A".
 _MISLABELLED_UNITS = {(Pollutant.NO2, "ppb"): CANONICAL_UNIT}
+# Regions where that was verified. Anywhere else a "ppb" NO2 reading is NOT assumed
+# to be mislabelled (a genuine ppb sensor would then be stored at 1/1.88 of the
+# truth) and NOT converted either (a mislabelled one would be stored at 1.88x, which
+# happened to Delhi for five days): it is skipped and counted, so the hour reads as
+# missing. After scripts/mumbai_unit_check.py shows ratio ~1.00 for a region, add it here.
+MISLABEL_VERIFIED_REGIONS = frozenset({"delhi-ncr"})
 
 
-def declared_unit(pollutant: Pollutant, unit: str) -> str:
-    """The unit OpenAQ's values are really in (see _MISLABELLED_UNITS)."""
-    return _MISLABELLED_UNITS.get((pollutant, (unit or "").strip()), unit)
+# OpenAQ's coordinates for a location can differ slightly from ours, and three real Delhi
+# stations (Rohtak, Dharuhera, Bhiwadi) sit within ~0.01 degree of the bbox edge, so the
+# rule applies within this margin around a verified region (Mumbai is 1,000+ km away).
+VERIFIED_REGION_MARGIN_DEGREES = 0.25
+
+
+def _in_verified_region(lat: float, lon: float) -> bool:
+    for region_id in MISLABEL_VERIFIED_REGIONS:
+        region = get_region(region_id)
+        if region is None:
+            continue
+        min_lon, min_lat, max_lon, max_lat = region.bbox
+        m = VERIFIED_REGION_MARGIN_DEGREES
+        if min_lon - m <= lon <= max_lon + m and min_lat - m <= lat <= max_lat + m:
+            return True
+    return False
+
+
+def declared_unit(pollutant: Pollutant, unit: str, lat: float | None = None, lon: float | None = None) -> str | None:
+    """The unit OpenAQ's values are really in (see _MISLABELLED_UNITS), or None when
+    the label is a known mislabel but the sensor is not in a region where that was
+    verified (or has no coordinates): the caller must skip the reading."""
+    key = (pollutant, (unit or "").strip())
+    if key not in _MISLABELLED_UNITS:
+        return unit
+    if lat is not None and lon is not None and _in_verified_region(lat, lon):
+        return _MISLABELLED_UNITS[key]
+    return None
 
 
 class OpenAQAuthError(Exception):
@@ -72,6 +105,9 @@ class OpenAQSource(SensorSource):
         # /locations/{id} GET per station per chunk, which multiplies real
         # request volume ~25x and reliably burns through OpenAQ's rate limit.
         self._sensor_cache: dict[str, dict[Pollutant, int]] = {}
+        # (lat, lon) per location from the same /locations/{id} response; decides
+        # whether the NO2 "ppb" relabel rule applies (see declared_unit).
+        self._location_coords: dict[str, tuple[float | None, float | None]] = {}
         # OpenAQ reports its 60 requests/minute quota on every response
         # (X-Ratelimit-Remaining / X-Ratelimit-Reset seconds). A run needs ~190
         # requests, so bursting and then backing off blindly on 429s made runs
@@ -156,7 +192,11 @@ class OpenAQSource(SensorSource):
                 break
             page += 1
 
-    def list_stations(self, *, bbox: tuple[float, float, float, float], country: str) -> list[StationMetadata]:
+    def list_stations(
+        self, *, bbox: tuple[float, float, float, float], country: str, default_city: str = "", state: str = ""
+    ) -> list[StationMetadata]:
+        """city is OpenAQ's locality, else `default_city`; state is `state`. Both stay
+        empty by default, for the CPCB feed matcher to fill (aqi_snapshot_loader)."""
         min_lon, min_lat, max_lon, max_lat = bbox
         params = {
             "bbox": f"{min_lon},{min_lat},{max_lon},{max_lat}",
@@ -173,8 +213,8 @@ class OpenAQSource(SensorSource):
                     name=loc.get("name") or f"location-{loc['id']}",
                     lat=coords["latitude"],
                     lon=coords["longitude"],
-                    city=loc.get("locality") or "Delhi",
-                    state="Delhi",
+                    city=loc.get("locality") or default_city,
+                    state=state,
                 )
             )
         return stations
@@ -208,7 +248,28 @@ class OpenAQSource(SensorSource):
             if pollutant is not None:
                 sensor_ids[pollutant] = sensor["id"]
         self._sensor_cache[location_id] = sensor_ids
+        coords = location.get("coordinates") or {}
+        self._location_coords[location_id] = (coords.get("latitude"), coords.get("longitude"))
         return {p: sid for p, sid in sensor_ids.items() if p in pollutants}
+
+    def fetch_raw_hours(
+        self, location_id: str, pollutants: list[Pollutant], start: datetime, end: datetime
+    ) -> dict[Pollutant, list[tuple[datetime, float, str]]]:
+        """(hour, value, unit label) exactly as OpenAQ states them: no relabel, no
+        skipping. For read-only unit checks (scripts/mumbai_unit_check.py); one
+        /locations/{id} request plus one /hours request per pollutant."""
+        window = {"datetime_from": start.astimezone(timezone.utc).isoformat(), "datetime_to": end.astimezone(timezone.utc).isoformat()}
+        out: dict[Pollutant, list[tuple[datetime, float, str]]] = {}
+        for pollutant, sensor_id in self._resolve_sensor_ids(location_id, pollutants).items():
+            rows = []
+            for row in self._paginate(f"/sensors/{sensor_id}/hours", window):
+                raw = ((row.get("period") or {}).get("datetimeFrom") or {}).get("utc")
+                if row.get("value") is None or not raw:
+                    continue
+                hour = datetime.fromisoformat(raw.replace("Z", "+00:00")).replace(minute=0, second=0, microsecond=0)
+                rows.append((hour, float(row["value"]), (row.get("parameter") or {}).get("units", "")))
+            out[pollutant] = rows
+        return out
 
     def fetch_readings(
         self,
@@ -219,6 +280,7 @@ class OpenAQSource(SensorSource):
         end: datetime,
     ) -> list[SensorReading]:
         readings: list[SensorReading] = []
+        unit_skipped: Counter = Counter()  # (location, pollutant) -> hours dropped for an unverified unit label
         for location_id in source_location_ids:
             try:
                 sensor_ids = self._resolve_sensor_ids(location_id, pollutants)
@@ -257,7 +319,12 @@ class OpenAQSource(SensorSource):
                         # it did in practice: this caused a real backfill's
                         # entire training run to see zero usable rows).
                         observed_at = observed_at.replace(minute=0, second=0, microsecond=0)
-                        unit = declared_unit(pollutant, (row.get("parameter") or {}).get("units", "ug/m3"))
+                        unit = declared_unit(
+                            pollutant, (row.get("parameter") or {}).get("units", "ug/m3"), *self._location_coords.get(location_id, (None, None))
+                        )
+                        if unit is None:
+                            unit_skipped[(location_id, pollutant)] += 1
+                            continue
                         readings.append(
                             SensorReading(
                                 source_location_id=location_id,
@@ -280,4 +347,10 @@ class OpenAQSource(SensorSource):
                         sensor_id, location_id, pollutant.value, exc,
                     )
                     continue
+        for (location_id, pollutant), n in unit_skipped.items():
+            logger.warning(
+                "Skipped %d %s hours at location %s: labelled ppb, and the ppb-is-really-ug/m3 rule "
+                "is not verified for its region (run scripts/mumbai_unit_check.py)",
+                n, pollutant.value, location_id,
+            )
         return readings
