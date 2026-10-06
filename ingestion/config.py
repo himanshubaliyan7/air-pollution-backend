@@ -1,4 +1,5 @@
 from common.constants import SensorSourceName
+from common.regions import get_region, load_regions
 from ingestion.sources.base import SensorSource
 from ingestion.sources.openaq import OpenAQSource
 
@@ -10,11 +11,20 @@ SENSOR_SOURCE_REGISTRY: dict[SensorSourceName, type[SensorSource]] = {
 
 ACTIVE_SOURCE = SensorSourceName.OPENAQ
 
-# (min_lon, min_lat, max_lon, max_lat) - matches ingestion/weather/grid.py's
-# DELHI_NCR_AREA but expressed as a bbox tuple, which is what OpenAQ's
-# /v3/locations?bbox= parameter expects.
-DELHI_NCR_BBOX = (76.6, 28.2, 77.6, 29.0)
-DELHI_NCR_COUNTRY_ISO = "IN"
+def region_search_area(region_id: str) -> tuple[tuple[float, float, float, float], str]:
+    """(bbox, country ISO) for station discovery in a region, from config/regions.yaml.
+    bbox is (min_lon, min_lat, max_lon, max_lat), what OpenAQ's /v3/locations?bbox=
+    parameter expects."""
+    region = get_region(region_id)
+    if region is None:
+        known = ", ".join(r.id for r in load_regions())
+        raise ValueError(f"unknown region {region_id!r} (known: {known})")
+    return region.bbox, region.country
+
+
+# Aliases kept for existing callers; the values come from config/regions.yaml
+# (matches ingestion/weather/grid.py's DELHI_NCR_AREA).
+DELHI_NCR_BBOX, DELHI_NCR_COUNTRY_ISO = region_search_area("delhi-ncr")
 
 
 def make_station_id(source: SensorSourceName, source_location_id: str) -> str:
