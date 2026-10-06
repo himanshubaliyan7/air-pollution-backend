@@ -21,6 +21,12 @@ Run inside the Airflow scheduler container (scripts/ is not in the image):
     sudo docker exec -i docker-airflow-scheduler-1 python - --apply < scripts/retrain_models.py
     ... python - --apply --pollutant pm25 --station openaq:5630 < scripts/retrain_models.py
     ... python - --apply --target daily_mean < scripts/retrain_models.py
+    ... python - --apply --target daily_mean --region mumbai < scripts/retrain_models.py
+
+The daily-mean ratios are fitted per region, from that region's stations only.
+A region with too little history (models/config/model_config.yaml
+training.min_level_days / min_level_stations) gets no models, and its stations'
+old ratios are deactivated: they then read as no-data.
 """
 
 import argparse
@@ -30,8 +36,9 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy import select
 
 from common.config import forecast_target
-from common.constants import DEFAULT_HORIZONS_HOURS, ForecastTarget, Pollutant
+from common.constants import DEFAULT_HORIZONS_HOURS, ForecastTarget, ModelType, Pollutant
 from common.logging_conf import configure_logging
+from common.regions import get_region, region_for_point
 from db.models import ModelRun
 from db.session import get_session
 from models import registry
@@ -42,13 +49,16 @@ logger = logging.getLogger(__name__)
 
 
 def retrain(session, apply: bool, pollutants: list[Pollutant], station_ids: list[str] | None,
-            now: datetime | None = None, target: ForecastTarget | None = None) -> dict:
-    """Counts by outcome; `kept` lists the combinations left on their old model."""
+            now: datetime | None = None, target: ForecastTarget | None = None, region_id: str | None = None) -> dict:
+    """Counts by outcome; `kept` lists the combinations left on their old model.
+    `region_id` limits it to the stations of one region (default: all)."""
     target = target or forecast_target()
     config = load_model_config()["training"]
     now = now or datetime.now(timezone.utc)
     window_start = now - timedelta(days=config["default_training_window_days"])
     stations = [s for s in _active_stations(session) if not station_ids or s.station_id in station_ids]
+    if region_id:
+        stations = [s for s in stations if (r := region_for_point(s.lat, s.lon)) is not None and r.id == region_id]
 
     previously_active = session.execute(
         select(ModelRun.model_id, ModelRun.station_id, ModelRun.pollutant, ModelRun.horizon_hours,
@@ -85,7 +95,9 @@ def retrain(session, apply: bool, pollutants: list[Pollutant], station_ids: list
                 else:
                     report["trained" if ids else "skipped"] += 1
                 if not ids:
-                    if key in had_model:
+                    # The daily-mean family switches an unsupported fit off; that is not "kept".
+                    if key in had_model and registry.get_active_models(
+                            session, station.station_id, pollutant, horizon, ModelType.QUANTILE_REGRESSOR, target):
                         report["kept"].append(key)
                     continue
                 for model_id in ids:
@@ -102,13 +114,17 @@ def main() -> None:
     parser.add_argument("--pollutant", choices=[p.value for p in Pollutant], help="default: all")
     parser.add_argument("--station", action="append", help="station id; repeatable (default: all active)")
     parser.add_argument("--target", choices=[t.value for t in ForecastTarget], help="default: the family being served")
+    parser.add_argument("--region", help="region id (config/regions.yaml); default: all regions")
     args = parser.parse_args()
+    if args.region and get_region(args.region) is None:
+        parser.error(f"unknown region {args.region!r}")
 
     pollutants = [Pollutant(args.pollutant)] if args.pollutant else list(Pollutant)
     session = get_session()
     try:
         report = retrain(session, args.apply, pollutants, args.station,
-                         target=ForecastTarget(args.target) if args.target else None)
+                         target=ForecastTarget(args.target) if args.target else None,
+                         region_id=args.region)
         if args.apply:
             print(f"\ncombinations trained {report['trained']}, skipped (too little data) {report['skipped']}, "
                   f"failed {report['failed']}; models activated {report['activated']}")
