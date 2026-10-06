@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 import requests
 
 from common.constants import Pollutant, SensorSourceName
-from common.regions import region_for_point
+from common.regions import get_region
 from ingestion.sources.base import SensorReading, SensorSource, StationMetadata
 from ingestion.units import CANONICAL_UNIT
 
@@ -53,6 +53,24 @@ _MISLABELLED_UNITS = {(Pollutant.NO2, "ppb"): CANONICAL_UNIT}
 MISLABEL_VERIFIED_REGIONS = frozenset({"delhi-ncr"})
 
 
+# OpenAQ's coordinates for a location can differ slightly from ours, and three real Delhi
+# stations (Rohtak, Dharuhera, Bhiwadi) sit within ~0.01 degree of the bbox edge, so the
+# rule applies within this margin around a verified region (Mumbai is 1,000+ km away).
+VERIFIED_REGION_MARGIN_DEGREES = 0.25
+
+
+def _in_verified_region(lat: float, lon: float) -> bool:
+    for region_id in MISLABEL_VERIFIED_REGIONS:
+        region = get_region(region_id)
+        if region is None:
+            continue
+        min_lon, min_lat, max_lon, max_lat = region.bbox
+        m = VERIFIED_REGION_MARGIN_DEGREES
+        if min_lon - m <= lon <= max_lon + m and min_lat - m <= lat <= max_lat + m:
+            return True
+    return False
+
+
 def declared_unit(pollutant: Pollutant, unit: str, lat: float | None = None, lon: float | None = None) -> str | None:
     """The unit OpenAQ's values are really in (see _MISLABELLED_UNITS), or None when
     the label is a known mislabel but the sensor is not in a region where that was
@@ -60,8 +78,7 @@ def declared_unit(pollutant: Pollutant, unit: str, lat: float | None = None, lon
     key = (pollutant, (unit or "").strip())
     if key not in _MISLABELLED_UNITS:
         return unit
-    region = region_for_point(lat, lon) if lat is not None and lon is not None else None
-    if region is not None and region.id in MISLABEL_VERIFIED_REGIONS:
+    if lat is not None and lon is not None and _in_verified_region(lat, lon):
         return _MISLABELLED_UNITS[key]
     return None
 
