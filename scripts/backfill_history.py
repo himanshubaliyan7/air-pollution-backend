@@ -22,6 +22,7 @@ from datetime import date, datetime, timedelta, timezone
 from common.config import get_settings
 from common.constants import Pollutant
 from common.logging_conf import configure_logging
+from common.regions import select_stations
 from db.session import get_session
 from ingestion.config import ACTIVE_SOURCE, SENSOR_SOURCE_REGISTRY
 from ingestion.loaders.sensor_loader import load_sensor_readings
@@ -29,7 +30,6 @@ from ingestion.loaders.weather_loader import load_weather_readings
 from ingestion.weather.era5_client import ERA5Client
 from ingestion.weather.grid import DELHI_NCR_AREA
 from orchestration.plugins.common.tasks import _active_stations
-from scripts.backfill_archive import select_stations
 
 logger = logging.getLogger(__name__)
 

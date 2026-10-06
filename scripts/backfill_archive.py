@@ -24,7 +24,7 @@ from sqlalchemy import func, select
 
 from common.constants import Pollutant, SensorSourceName
 from common.logging_conf import configure_logging
-from common.regions import get_region
+from common.regions import select_stations
 from db.models import RawSensorReading
 from db.session import get_session
 from ingestion.config import ACTIVE_SOURCE
@@ -62,18 +62,6 @@ def live_sensor_ids(session) -> dict[str, dict[Pollutant, int]]:
         if sensor_id.isdigit():
             out.setdefault(station_id, {})[pollutant] = int(sensor_id)
     return out
-
-
-def select_stations(stations, region_id: str | None = None, station_ids: list[str] | None = None) -> list:
-    """Stations inside a region's bbox and/or with one of the given station ids."""
-    if region_id is not None:
-        region = get_region(region_id)
-        if region is None:
-            raise ValueError(f"unknown region {region_id!r}")
-        stations = [s for s in stations if region.contains(s.lat, s.lon)]
-    if station_ids:
-        stations = [s for s in stations if s.station_id in set(station_ids)]
-    return list(stations)
 
 
 def main() -> None:

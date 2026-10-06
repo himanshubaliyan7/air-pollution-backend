@@ -37,7 +37,7 @@ from common.regions import get_region
 from db.models import RawSensorReading, Station, StationAqiSnapshot
 from db.session import get_session
 from models.exceedance import load_thresholds
-from scripts.cpcb_subindex_study import FEED_IDS, inverter
+from common.subindex import FEED_IDS, inverter
 
 OFFSET_STEPS = range(-8, 5)  # half hours between CPCB's lastupdate and the start of OpenAQ's hour
 MIN_PAIRS = 10

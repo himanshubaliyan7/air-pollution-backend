@@ -149,3 +149,12 @@ def test_regions_api_serves_delhis_backtest_and_null_for_mumbai(db_session):
     }
     assert regions["mumbai"]["backtest"] is None
     assert TestClient(app).get("/api/v1/regions/mumbai").json()["backtest"] is None
+
+
+def test_scripts_do_not_import_each_other():
+    """Owner-run scripts are piped into the container, where the `scripts` package does not exist."""
+    from pathlib import Path
+
+    for path in (Path(__file__).resolve().parents[2] / "scripts").glob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        assert "from scripts" not in text.replace("python -m scripts", "") and "import scripts" not in text, path.name

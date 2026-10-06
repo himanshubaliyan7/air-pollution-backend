@@ -84,3 +84,15 @@ def region_for_point(lat: float, lon: float) -> Region | None:
 
 def get_region(region_id: str) -> Region | None:
     return next((r for r in load_regions() if r.id == region_id), None)
+
+
+def select_stations(stations, region_id: str | None = None, station_ids: list[str] | None = None) -> list:
+    """Stations inside a region's bbox and/or with one of the given station ids."""
+    if region_id is not None:
+        region = get_region(region_id)
+        if region is None:
+            raise ValueError(f"unknown region {region_id!r}")
+        stations = [s for s in stations if region.contains(s.lat, s.lon)]
+    if station_ids:
+        stations = [s for s in stations if s.station_id in set(station_ids)]
+    return list(stations)
