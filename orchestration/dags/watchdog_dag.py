@@ -22,52 +22,23 @@ default_args = {
 
 def _run_watchdog(**_):
     from airflow.models import DagModel, Variable
-    from sqlalchemy import func, select
 
-    from common.constants import MAX_INPUT_STALENESS_HOURS, SensorSourceName
-    from common.freshness import floor_hour
-    from db.models import Forecast, RawSensorReading, StationAqiSnapshot
+    from common.regions import load_regions
     from db.session import get_session
     from orchestration.plugins.common.alerts import ping_healthcheck, send_telegram
-    from orchestration.plugins.common.watchdog import evaluate_health
+    from orchestration.plugins.common.region_health import collect_region_health
+    from orchestration.plugins.common.watchdog import all_issue_keys, evaluate_health
 
     now = datetime.now(timezone.utc)
+    regions = load_regions()
     session = get_session()
     try:
-        newest_snapshot = session.execute(select(func.max(StationAqiSnapshot.source_updated_at))).scalar_one_or_none()
-        fresh = session.execute(
-            select(func.count(func.distinct(StationAqiSnapshot.station_id))).where(
-                StationAqiSnapshot.source_updated_at >= now - timedelta(hours=3)
-            )
-        ).scalar_one()
-        # OpenAQ only: ingestion_dag's own feed. CPCB readings (from current_aqi_dag) would
-        # otherwise hide a broken ingestion run or a stalled OpenAQ relay.
-        newest_sensor = session.execute(
-            select(func.max(RawSensorReading.observed_at)).where(RawSensorReading.source == SensorSourceName.OPENAQ)
-        ).scalar_one_or_none()
-        # Same cutoff as common.freshness.is_input_fresh, so "current" matches what the API serves.
-        cutoff = floor_hour(now) - timedelta(hours=MAX_INPUT_STALENESS_HOURS)
-        forecast_stations = session.execute(
-            select(func.count(func.distinct(Forecast.station_id))).where(
-                Forecast.forecast_made_at >= cutoff, Forecast.target_time >= cutoff  # target_time prunes hypertable chunks
-            )
-        ).scalar_one()
-        fresh_input_stations = session.execute(
-            select(func.count(func.distinct(RawSensorReading.station_id))).where(RawSensorReading.observed_at >= cutoff)
-        ).scalar_one()
+        health = collect_region_health(session, now, regions)
     finally:
         session.close()
 
     ingestion = DagModel.get_dagmodel("ingestion_dag")
-    issues = evaluate_health(
-        now,
-        newest_snapshot=newest_snapshot,
-        stations_with_fresh_snapshot=fresh,
-        sensor_ingestion_enabled=bool(ingestion and not ingestion.is_paused),
-        newest_sensor_reading=newest_sensor,
-        stations_with_current_forecast=forecast_stations,
-        stations_with_fresh_input=fresh_input_stations,
-    )
+    issues = evaluate_health(now, regions=health, sensor_ingestion_enabled=bool(ingestion and not ingestion.is_paused))
 
     current_keys = {i.key for i in issues}
     for issue in issues:
@@ -76,7 +47,7 @@ def _run_watchdog(**_):
         if last is None or now - datetime.fromisoformat(last) > REPEAT_AFTER:
             send_telegram(f"WATCHDOG: {issue.message}")
             Variable.set(var, now.isoformat())
-    for key in ("aqi-feed-stale", "aqi-coverage-low", "sensor-data-stale", "forecast-coverage-low"):
+    for key in all_issue_keys([r.id for r in regions]):
         var = f"watchdog_alerted:{key}"
         if key not in current_keys and Variable.get(var, default_var=None) is not None:
             send_telegram(f"WATCHDOG: resolved - {key}")

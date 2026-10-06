@@ -33,7 +33,13 @@ with DAG(
     tags=["ingestion"],
 ) as dag:
 
-    fetch_openaq = PythonOperator(task_id="fetch_openaq_readings", python_callable=ingest_sensor_readings)
+    # A run is ~190 requests paced at 60/min (~3.5 min measured for Delhi; a second region adds
+    # roughly a third). 30 minutes is about 8x that, so a normal run never meets it, while a hung
+    # request no longer holds max_active_runs=1 (and so every later hourly run) forever. The
+    # ERA5 tasks get no limit: the Copernicus queue can legitimately wait for a long time.
+    fetch_openaq = PythonOperator(
+        task_id="fetch_openaq_readings", python_callable=ingest_sensor_readings, execution_timeout=timedelta(minutes=30)
+    )
 
     fetch_era5_latest = PythonOperator(task_id="fetch_era5_latest", python_callable=ingest_era5_recent)
 
