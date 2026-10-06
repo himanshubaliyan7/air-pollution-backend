@@ -144,7 +144,7 @@ def test_regions_endpoint_and_station_region_and_local_day(db_session):
 
     client = TestClient(app)
     regions = client.get("/api/v1/regions").json()
-    assert [r["id"] for r in regions] == ["delhi-ncr"]
+    assert [r["id"] for r in regions] == ["delhi-ncr", "mumbai"]
     r = regions[0]
     assert r["timezone"] == "Asia/Kolkata" and r["aqi_standard"] == "CPCB National AQI"
     assert [c["id"] for c in r["aqi_categories"]] == ["good", "satisfactory", "moderate", "poor", "very_poor", "severe"]
