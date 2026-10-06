@@ -4,11 +4,11 @@ For each active station, uses the same sensor per pollutant the live pipeline
 ingests (read from the stored source_record_id), so history and live data
 come from one instrument. Rows are upserted exactly like hourly ingestion.
 
-Usage (inside the Airflow scheduler container):
-    python -m scripts.backfill_archive --start 2025-10-01 --end 2026-03-23 --dry-run
-    python -m scripts.backfill_archive --start 2025-10-01 --end 2026-03-23
-    python -m scripts.backfill_archive --region mumbai --start 2026-04-01 --end 2026-09-30 --dry-run
-    python -m scripts.backfill_archive --station openaq:8118 --start 2026-04-01 --end 2026-04-30
+Usage (inside the Airflow scheduler container, where the scripts package is not in the image):
+    sudo docker exec -i docker-airflow-scheduler-1 python - --start 2025-10-01 --end 2026-03-23 --dry-run < scripts/backfill_archive.py
+    ... python - --region mumbai --start 2026-04-01 --end 2026-09-30 --dry-run < scripts/backfill_archive.py
+    ... python - --station openaq:8118 --start 2026-04-01 --end 2026-04-30 < scripts/backfill_archive.py
+(from a checkout: python -m scripts.backfill_archive ...)
 
 A station needs a stored OpenAQ reading first (that is where its sensor ids come
 from), so a newly seeded station is skipped until one hourly ingestion has run.

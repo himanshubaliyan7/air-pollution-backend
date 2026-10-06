@@ -7,7 +7,7 @@ Fetches in day-sized chunks (both to keep individual API requests small -
 OpenAQ pagination and CDS request size limits - and so a failure partway
 through a multi-month backfill doesn't lose already-fetched days).
 
-Usage:
+Usage (in the container pipe the file instead: python - --days 180 < scripts/backfill_history.py):
     python -m scripts.backfill_history --days 180
     python -m scripts.backfill_history --days 180 --skip-weather   # OpenAQ only
     python -m scripts.backfill_history --days 30 --region mumbai   # OpenAQ API, that region's stations; no weather
