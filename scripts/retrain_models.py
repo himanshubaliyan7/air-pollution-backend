@@ -7,7 +7,10 @@ comparison against them means nothing and could keep a bad model. Rebuild the
 features first (scripts/rebuild_features.py --days 372), or training reads the
 old rows.
 
-Without --apply it only reports what is active. With --apply it prints the
+Without --apply it only reports what is active and, for the daily_mean family, whether
+each region's ratio fit passes the floor (see below): run it before deploying, since a
+FAIL deactivates the ratios of every station of that region at the next --apply or
+weekly retrain. With --apply it prints the
 active model ids (for rollback), trains, and activates every new model. A
 combination that cannot be trained now keeps its old model; those are listed
 at the end.
@@ -21,6 +24,7 @@ Run inside the Airflow scheduler container (scripts/ is not in the image):
     sudo docker exec -i docker-airflow-scheduler-1 python - --apply < scripts/retrain_models.py
     ... python - --apply --pollutant pm25 --station openaq:5630 < scripts/retrain_models.py
     ... python - --apply --target daily_mean < scripts/retrain_models.py
+    ... python - --target daily_mean --region delhi-ncr < scripts/retrain_models.py   (report only)
     ... python - --apply --target daily_mean --region mumbai < scripts/retrain_models.py
 
 The daily-mean ratios are fitted per region, from that region's stations only.
@@ -41,11 +45,35 @@ from common.logging_conf import configure_logging
 from common.regions import get_region, region_for_point
 from db.models import ModelRun
 from db.session import get_session
-from models import registry
-from models.train import load_model_config, train_station_pollutant_horizon
+from models import level, registry
+from models.train import _level_fit_is_sufficient, load_model_config, train_station_pollutant_horizon
 from orchestration.plugins.common.tasks import _active_stations
 
 logger = logging.getLogger(__name__)
+
+
+def report_level_floor(session, stations, previously_active, pollutants, config: dict, quantiles: list[float],
+                       window_start, now) -> None:
+    """Per region, pollutant and day-ahead: the distinct days and stations behind the fit
+    against the floor, and how many active ratio rows a failing fit would deactivate
+    (models.train._train_level does that for every station of the region)."""
+    floor = (config.get("min_level_days", 0), config.get("min_level_stations", 0))
+    print(f"\nlevel-ratio floor: {floor[0]} distinct days, {floor[1]} stations and {config['min_training_rows']} rows per region/pollutant/day-ahead")
+    by_region: dict[str | None, list] = {}
+    for s in stations:
+        region = region_for_point(s.lat, s.lon)
+        by_region.setdefault(region.id if region else None, []).append(s.station_id)
+    for region_id, ids in sorted(by_region.items(), key=lambda kv: str(kv[0])):
+        for pollutant in pollutants:
+            fits = level.fit_log_ratio_quantiles(
+                session, pollutant, window_start, now, quantiles, region_id) if region_id else {}
+            for horizon in DEFAULT_HORIZONS_HOURS:
+                fit = fits.get(horizon)
+                active = sum(1 for r in previously_active if r.station_id in ids and r.pollutant == pollutant and r.horizon_hours == horizon)
+                verdict = "PASS" if _level_fit_is_sufficient(fit, config) else f"FAIL - would deactivate {active} active rows"
+                print(f"  {region_id or 'outside every region'} {pollutant.value} day {horizon // 24}: "
+                      f"{fit.days if fit else 0} days, {fit.stations if fit else 0} stations, {fit.rows if fit else 0} rows "
+                      f"(floor {floor[0]} / {floor[1]} / {config['min_training_rows']}) {verdict}")
 
 
 def retrain(session, apply: bool, pollutants: list[Pollutant], station_ids: list[str] | None,
@@ -71,6 +99,9 @@ def retrain(session, apply: bool, pollutants: list[Pollutant], station_ids: list
           f"{len(DEFAULT_HORIZONS_HOURS)} horizons; {len(previously_active)} active models on {len(had_model)} combinations")
     report = {"trained": 0, "skipped": 0, "failed": 0, "activated": 0, "kept": []}
     if not apply:
+        if target is ForecastTarget.DAILY_MEAN:
+            report_level_floor(session, stations, previously_active, pollutants, config,
+                               sorted(load_model_config()["quantiles"]), window_start, now)
         print("report only; rerun with --apply to train")
         return report
 
