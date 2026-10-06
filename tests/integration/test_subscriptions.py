@@ -16,6 +16,7 @@ from common.config import get_settings
 from common.constants import AlertStatus, Pollutant
 from db.models import AlertSubscription, DigestLog
 from tests.integration.forecast_helpers import add_station, seed_forecast_run
+from tests.integration.region_fixture import MUMBAI_LAT, MUMBAI_LON, two_regions  # noqa: F401
 
 UTC = timezone.utc
 # 12:30 UTC = 18:00 IST, when alert_digest_dag runs; "tomorrow" is 2026-09-26 in Delhi.
@@ -318,3 +319,20 @@ def test_digest_skips_a_confirmed_address_that_is_no_longer_invited(client, db_s
     monkeypatch.setattr(get_settings(), "subscription_allowed_emails", "owner@example.com")
     assert _digest(db_session) == {"sent": 0, "failed": 0, "skipped": 0, "not_invited": 1}
     assert outbox == []
+
+
+def test_digest_for_mumbai_and_mixed_region_subscriptions(client, db_session, outbox, two_regions):
+    """Both regions share a time zone and the CPCB standard, so a Mumbai (or mixed)
+    subscriber gets the same email shape: every station named, 'tomorrow' in IST, no
+    city wording."""
+    mumbai = add_station(db_session, "m", lat=MUMBAI_LAT, lon=MUMBAI_LON)
+    seed_forecast_run(db_session, mumbai, DIGEST_NOW.replace(minute=0) - timedelta(hours=2), flagged_horizons=(24,))
+    _confirmed(client, outbox, email="mum@example.com", station_ids=[mumbai])
+    _confirmed(client, outbox, email="both@example.com", station_ids=[mumbai, "openaq:a"])
+    outbox.clear()
+
+    assert _digest(db_session) == {"sent": 2, "failed": 0, "skipped": 0, "not_invited": 0}
+    bodies = {m["To"]: _text(m) for m in outbox}
+    assert "Station m (PM2.5)" in bodies["mum@example.com"] and "Sat 26 Sep: No-go" in bodies["mum@example.com"]
+    assert "Station m (PM2.5)" in bodies["both@example.com"] and "Station a (PM2.5)" in bodies["both@example.com"]
+    assert "Delhi" not in bodies["mum@example.com"]
