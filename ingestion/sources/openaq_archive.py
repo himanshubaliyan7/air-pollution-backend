@@ -17,14 +17,15 @@ that contains its period end (00:45 -> the 00:00-01:00 hour), and the hour's
 readings are averaged. observed_at = floor_hour(UTC start of that local hour),
 matching OpenAQSource; source_record_id reuses the API's "<sensor>:<from UTC>".
 
-Units are passed through as published (NO2 arrives in ppb, like the API).
+Units are passed through as published (NO2 arrives in ppb, like the API), except
+that openaq.declared_unit relabels or skips the NO2 "ppb" rows by the row's lat/lon.
 """
 
 import csv
 import gzip
 import io
 import logging
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 
 import requests
@@ -61,6 +62,7 @@ def parse_day(raw_csv: str, location_id: str, sensor_ids: dict[Pollutant, int] |
     pollutant, so history and live data share a sensor."""
     buckets: dict[tuple, list[float]] = defaultdict(list)
     units: dict[tuple, str] = {}
+    coords: dict[tuple, tuple[float | None, float | None]] = {}
     for row in csv.DictReader(io.StringIO(raw_csv)):
         pollutant = _PARAMETER_TO_POLLUTANT.get((row.get("parameter") or "").strip())
         if pollutant is None:
@@ -76,17 +78,38 @@ def parse_day(raw_csv: str, location_id: str, sensor_ids: dict[Pollutant, int] |
         key = (pollutant, sensor_id, _hour_start_utc(period_end))
         buckets[key].append(value)
         units[key] = (row.get("units") or "").strip()
-    return [
-        SensorReading(
-            source_location_id=str(location_id),
-            pollutant=pollutant,
-            value=sum(values) / len(values),
-            unit=declared_unit(pollutant, units[(pollutant, sensor_id, start)]),
-            observed_at=start.replace(minute=0, second=0, microsecond=0),
-            source_record_id=f"{sensor_id}:{start:%Y-%m-%dT%H:%M:%SZ}",
+        coords[key] = _coordinates(row)
+    readings = []
+    skipped: Counter = Counter()  # pollutant -> hours dropped for an unverified unit label
+    for (pollutant, sensor_id, start), values in sorted(buckets.items(), key=lambda kv: (kv[0][0].value, kv[0][1], kv[0][2])):
+        key = (pollutant, sensor_id, start)
+        unit = declared_unit(pollutant, units[key], *coords[key])
+        if unit is None:
+            skipped[pollutant] += 1
+            continue
+        readings.append(
+            SensorReading(
+                source_location_id=str(location_id),
+                pollutant=pollutant,
+                value=sum(values) / len(values),
+                unit=unit,
+                observed_at=start.replace(minute=0, second=0, microsecond=0),
+                source_record_id=f"{sensor_id}:{start:%Y-%m-%dT%H:%M:%SZ}",
+            )
         )
-        for (pollutant, sensor_id, start), values in sorted(buckets.items(), key=lambda kv: (kv[0][0].value, kv[0][1], kv[0][2]))
-    ]
+    for pollutant, n in skipped.items():
+        logger.warning(
+            "Location %s: skipped %d %s hours labelled ppb; the ppb-is-really-ug/m3 rule is not verified for this region",
+            location_id, n, pollutant.value,
+        )
+    return readings
+
+
+def _coordinates(row: dict) -> tuple[float | None, float | None]:
+    try:
+        return float(row["lat"]), float(row["lon"])
+    except (KeyError, TypeError, ValueError):
+        return None, None
 
 
 class OpenAQArchiveClient:
