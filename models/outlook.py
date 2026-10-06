@@ -30,7 +30,7 @@ from common.freshness import floor_hour, is_input_fresh
 from common.regions import region_for_point
 from db.models import Forecast, Station
 from models.daily import category_for_day, verdict_for_category
-from models.exceedance import get_aqi_category, load_thresholds
+from models.exceedance import get_aqi_category, thresholds_for_point
 
 CAUTION_PROBABILITY_FLOOR = 0.15  # hourly family: below the decision threshold but worth flagging as "caution"
 
@@ -196,7 +196,7 @@ def outlook_from_rows(
     if not is_forecast_current(made_at, now):
         return Outlook(station.station_id, pollutant.value, tz_name, made_at, False, [], "no-data")
 
-    thresholds = load_thresholds()
+    thresholds = thresholds_for_point(station.lat, station.lon)
     by_day: dict = {}
     for r in rows:
         local_date = r.target_time.astimezone(ZoneInfo(tz_name)).date()

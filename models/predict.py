@@ -53,7 +53,7 @@ def forecast(
     """One horizon's forecast from the active quantile models of `target`
     (default: the family being served). For daily-mean models every value is
     about the mean of the local day horizon_hours / 24 days after as_of's day."""
-    thresholds = thresholds or exceedance.load_thresholds()
+    thresholds = thresholds or exceedance.thresholds_for_point(station_lat, station_lon)
     threshold_conc = exceedance.get_health_threshold_concentration(pollutant, thresholds)
 
     quantile_models = registry.get_active_models(

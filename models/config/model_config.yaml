@@ -33,6 +33,13 @@ training:
   default_training_window_days: 365
   holdout_days: 30
   min_training_rows: 100
+  # Daily-mean level rule (models/level.py), fitted per region. A region's ratios
+  # are registered only when its labelled rows span this many distinct local
+  # days and come from this many stations; below that the stations of the region
+  # get no forecast (no-data) rather than a thin or borrowed fit. Delhi NCR has a
+  # year from ~80 stations; a new region needs about half a year first.
+  min_level_days: 180
+  min_level_stations: 3
   # Feature columns that are computed and stored but not given to the models.
   # The history holds one year, so day-of-year and the season flags identify
   # last year's dates instead of a season: a model learns "high from 1 October"
