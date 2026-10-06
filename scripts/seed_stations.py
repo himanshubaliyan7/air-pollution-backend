@@ -4,7 +4,9 @@
 Run once initially, and re-run periodically (not hourly - this is a station
 *discovery* call, not a readings pull) to pick up new/retired CPCB stations.
 Requires OPENAQ_API_KEY. Also writes a human-reviewable copy to
-config/stations_<region>.yaml (stations_delhi_ncr.yaml for delhi-ncr) so an
+config/stations_<region>.yaml (stations_delhi_ncr.yaml for delhi-ncr; --review-file
+picks another path, and a file that cannot be written - config/ is read-only in the
+container - is printed to stdout instead of failing the run) so an
 operator can deactivate a noisy/bad station without touching code (set
 is_active: false there and re-run, or edit the DB row directly). Each region
 has its own file, so seeding one never overwrites another's.
@@ -17,11 +19,13 @@ Usage:
     python -m scripts.seed_stations
     python -m scripts.seed_stations --region mumbai --dry-run   # list, write nothing
     python -m scripts.seed_stations --region mumbai
+    sudo docker exec -i <container> python - --region mumbai < scripts/seed_stations.py
 """
 
 import argparse
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 
 import yaml
 from sqlalchemy.dialects.postgresql import insert
@@ -76,23 +80,33 @@ def upsert_stations(session, rows: list[dict]) -> None:
     session.commit()
 
 
-def write_review_file(region_id: str, rows: list[dict], now: datetime) -> None:
-    path = review_path(region_id)
-    path.write_text(
-        yaml.safe_dump(
-            {
-                "generated_at": now.isoformat(),
-                "region": region_id,
-                "source": ACTIVE_SOURCE.value,
-                "bbox": list(region_search_area(region_id)[0]),
-                "stations": [
-                    {k: r[k] for k in ("station_id", "name", "lat", "lon", "city", "source_location_id")} | {"is_active": True}
-                    for r in rows
-                ],
-            },
-            sort_keys=False,
-        )
+def review_yaml(region_id: str, rows: list[dict], now: datetime) -> str:
+    return yaml.safe_dump(
+        {
+            "generated_at": now.isoformat(),
+            "region": region_id,
+            "source": ACTIVE_SOURCE.value,
+            "bbox": list(region_search_area(region_id)[0]),
+            "stations": [
+                {k: r[k] for k in ("station_id", "name", "lat", "lon", "city", "source_location_id")} | {"is_active": True}
+                for r in rows
+            ],
+        },
+        sort_keys=False,
     )
+
+
+def write_review_file(region_id: str, rows: list[dict], now: datetime, path=None) -> None:
+    """The stations are already committed, so a file that cannot be written (the
+    container mounts config/ read-only) must not fail the run: print the YAML."""
+    path = path or review_path(region_id)
+    text = review_yaml(region_id, rows, now)
+    try:
+        path.write_text(text)
+    except OSError as exc:
+        print(f"# Could not write {path} ({exc}); the stations ARE in the database. Review copy:")
+        print(text)
+        return
     logger.info("Wrote %d stations to %s", len(rows), path)
 
 
@@ -100,6 +114,7 @@ def main() -> None:
     configure_logging()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--region", default=DEFAULT_REGION, help="region id from config/regions.yaml")
+    parser.add_argument("--review-file", type=Path, help="where to write the review YAML (default config/stations_<region>.yaml)")
     parser.add_argument("--dry-run", action="store_true", help="list what would be created, write nothing")
     args = parser.parse_args()
 
@@ -119,7 +134,7 @@ def main() -> None:
         upsert_stations(session, rows)
     finally:
         session.close()
-    write_review_file(args.region, rows, now)
+    write_review_file(args.region, rows, now, args.review_file)
 
 
 if __name__ == "__main__":

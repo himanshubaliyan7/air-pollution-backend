@@ -59,6 +59,22 @@ def test_seed_mumbai_uses_the_region_bbox_leaves_city_empty_and_writes_its_own_f
     assert not (seeded_env / "stations_delhi-ncr.yaml").exists()  # another region's file is never touched
 
 
+def test_unwritable_review_file_prints_the_yaml_and_still_succeeds(db_session, seeded_env, monkeypatch, capsys):
+    """config/ is read-only in the container: the committed seed must not end in a traceback."""
+    missing = seeded_env / "no-such-dir" / "review.yaml"
+    _run(monkeypatch, "--region", "mumbai", "--review-file", str(missing))
+    out = capsys.readouterr().out
+    assert "Could not write" in out and "region: mumbai" in out and "openaq:501" in out
+    assert db_session.query(Station).count() == 2
+
+
+def test_review_file_option_overrides_the_default_path(db_session, seeded_env, monkeypatch):
+    target = seeded_env / "custom.yaml"
+    _run(monkeypatch, "--region", "mumbai", "--review-file", str(target))
+    assert yaml.safe_load(target.read_text())["region"] == "mumbai"
+    assert not (seeded_env / "stations_mumbai.yaml").exists()
+
+
 def test_seed_defaults_to_delhi_and_keeps_its_stored_defaults(db_session, seeded_env, monkeypatch):
     _run(monkeypatch)
     assert FakeSource.calls == [((76.6, 28.2, 77.6, 29.0), "IN", "Delhi", "Delhi")]
