@@ -24,13 +24,12 @@ def group_by_region(stations) -> dict[str, list]:
 
 
 def thresholds_for_station(station, cache: dict) -> dict:
-    """The thresholds of the station's region (a station inside no region keeps the
-    global file, as before regions existed). `cache` maps region id -> thresholds
-    so a run reads each region's file once."""
+    """exceedance.thresholds_for_point for the station, cached. `cache` maps region id
+    -> thresholds so a run reads each region's file once."""
     region = region_for_point(station.lat, station.lon)
     key = region.id if region else None
     if key not in cache:
-        cache[key] = region.thresholds() if region else exceedance.load_thresholds()
+        cache[key] = exceedance.thresholds_for_point(station.lat, station.lon)
     return cache[key]
 
 
