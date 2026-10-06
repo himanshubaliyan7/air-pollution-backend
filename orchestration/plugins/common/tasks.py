@@ -262,7 +262,11 @@ def refresh_station_activity(max_dark_days: int = MAX_DARK_DAYS) -> dict[str, in
         source = SENSOR_SOURCE_REGISTRY[ACTIVE_SOURCE](api_key=get_settings().openaq_api_key)
         last_seen: dict = {}
         failed: list[str] = []
-        for region in load_regions():
+        stations = session.execute(select(Station)).scalars().all()
+        # A region with no station rows yet (not seeded) is not queried: OpenAQ's answer
+        # for it would be empty and fail the task for nothing.
+        seeded = {r.id for s in stations if (r := region_for_point(s.lat, s.lon)) is not None}
+        for region in (r for r in load_regions() if r.id in seeded):
             try:
                 answer = source.location_last_data_times(bbox=region.bbox, country=region.country)
             except Exception as exc:  # noqa: BLE001 - one region failing must not stop the others
@@ -286,7 +290,7 @@ def refresh_station_activity(max_dark_days: int = MAX_DARK_DAYS) -> dict[str, in
             ).scalars()
         )
         deactivated = reactivated = 0
-        for station in session.execute(select(Station)).scalars().all():
+        for station in stations:
             region = region_for_point(station.lat, station.lon)
             if region is not None and region.id in failed:
                 continue  # its region's query failed: no answer is not "dark"
