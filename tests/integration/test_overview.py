@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from common.constants import MAX_INPUT_STALENESS_HOURS, Pollutant
 from db.models import StationAqiSnapshot
+from tests.clock import fixed_datetime
 from tests.integration.forecast_helpers import add_reading, add_station, seed_forecast_run
 
 NOW = datetime.now(timezone.utc)
@@ -108,8 +109,12 @@ def test_overview_filters_by_region_and_days_ahead(db_session):
     assert client.get("/api/v1/overview", params={"region_id": "nowhere"}).json()["stations"] == []
 
 
-def test_overview_history_gives_each_hour_its_category_and_leaves_gaps_empty(db_session):
+def test_overview_history_gives_each_hour_its_category_and_leaves_gaps_empty(db_session, monkeypatch):
     from api.main import app
+
+    # HOUR was fixed at import; freeze the routers' "now" so the suite may cross an hour boundary.
+    monkeypatch.setattr("api.routers.overview.datetime", fixed_datetime(NOW))
+    monkeypatch.setattr("api.routers.forecasts.datetime", fixed_datetime(NOW))
 
     measured = add_station(db_session, "measured")
     silent = add_station(db_session, "silent")

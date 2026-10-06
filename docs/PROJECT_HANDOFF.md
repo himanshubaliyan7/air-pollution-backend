@@ -5,6 +5,31 @@ Read this first in a new chat. It is the complete state of the project: goal, wh
 ## 0. START HERE: session 11
 **State at the end of session 10 (2026-10-04 IST; last API check 2026-10-03 17:57 UTC = 23:27 IST).** Session 10 ran over two days and changed what the product says: three faults in the forecasts were found and fixed, and the verdict is now graded by the day's mean. The step-by-step record is in section 0a ("Session 10 details").
 
+**Session 13, later (2026-10-06 ~18:15 UTC = 23:45 IST): MUMBAI as a second region is BUILT, NOT deployed, and no Mumbai station exists yet.** The owner said this is the last piece of the project.
+- **How it was made:** by agents, on the owner's request (7 read-only researchers, 5 writers in separate working copies, 1 reviewer, 1 fixer); the reports are not in the repository. The usage limit was hit once mid-way.
+- **Backend: branch `feat/mumbai-region`, PR open against `main`. 289 tests pass locally.** What it does:
+  - `config/regions.yaml` has `mumbai` (bbox `[72.70, 18.80, 73.35, 19.55]`, same time zone and CPCB thresholds). A region may carry a `backtest` block; `/regions` returns it (Delhi has one, Mumbai none).
+  - The ratio fit of the daily rule is per region (`models/level.py`). A region needs 180 distinct days from 3 stations (`models/config/model_config.yaml`); below that nothing is registered, stale rows are deactivated and the outlook reads no-data. A region never borrows another's ratios.
+  - Thresholds are read through the station's region. Watchdog, data-quality and drift rules are per region; Delhi keeps the bare issue keys and its minimums stay 20 and 30 at 82 stations; Mumbai's keys end in `:mumbai`; the forecast-coverage rule applies only to a region that has model rows.
+  - `refresh_station_activity` asks about every region that has station rows. `fetch_openaq_readings` has a 30-minute `execution_timeout`.
+  - `seed_stations.py`, `backfill_archive.py`, `backfill_history.py`, `retrain_models.py`, `generate_forecasts.py` and `daily_verdict_backtest.py` take `--region`.
+  - **NO2 units:** OpenAQ's "ppb" label is treated as really ug/m3 only within 0.25 degree of Delhi's bbox (verified there). Elsewhere a "ppb" NO2 reading is SKIPPED and counted, never converted or relabelled, so Mumbai has no NO2 until `scripts/mumbai_unit_check.py` settles the unit.
+  - Weather is not ingested for Mumbai: the served rule reads only `rolling_mean_24h`.
+- **Frontend: air-clear PR #16 (`feat/two-regions`), OPEN.** Two-region home page, accuracy figures per region from `backtest`, restyled region switcher, last station remembered per region. 112 tests. **PR #15 (`fix/skin-mismatches`), OPEN:** muted map tiles, square map controls, neutral demo notice, themed checkboxes; independent of Mumbai.
+- **What is known about Mumbai's data:** CPCB's feed listed 43 stations in the box on 2026-10-06, 42 with PM2.5. **Unknown: which of them OpenAQ carries, and how much history.** Stations are created only from OpenAQ. The owner was asked to run a keyed `list_stations` for the box on the server; no answer yet.
+- **Order for the owner.** None of these commands has been run by anyone:
+  1. Merge the backend PR and deploy as usual (no migration). Deploy the frontend (PR #16) right after: `config/` is bind-mounted, so from `git pull` on, `/regions` lists an empty Mumbai, and the old frontend shows a plain region picker at `/`.
+  2. Right after the deploy and before the Sunday 00:00 UTC retrain: `sudo docker exec -i docker-airflow-scheduler-1 python - --target daily_mean --region delhi-ncr < scripts/retrain_models.py`. Every line must say PASS. A FAIL means the retrain would deactivate Delhi's rows: stop and fix first.
+  3. `... python - --region mumbai --dry-run < scripts/seed_stations.py`, then without `--dry-run`.
+  4. After two hourly runs: `... python - --region mumbai --limit 8 < scripts/mumbai_unit_check.py` (read-only, about 3 OpenAQ requests per station). Its docstring says how to act on the result.
+  5. `... python - --region mumbai --start 2025-10-01 --end 2026-09-30 --dry-run < scripts/backfill_archive.py`, then without `--dry-run`.
+  6. `... python - --days 372 < scripts/rebuild_features.py` (all stations; it has no region option).
+  7. `... python - --target daily_mean --region mumbai < scripts/retrain_models.py` (report), then with `--apply`.
+  8. `... python - --region mumbai < scripts/generate_forecasts.py`.
+  9. `... python - --region mumbai --history-start 2025-10-01 --fold 2026-06-01:2026-09-15 < scripts/daily_verdict_backtest.py 2> /dev/null`; put the result in Mumbai's `backtest` block.
+- **Not tested by anyone:** every script above against real OpenAQ, the S3 archive or the production database; the watchdog DAG under Airflow; the two-region site against a real second region (it was viewed through a local stand-in).
+- **Known leftovers:** `alerting/digest.py` and one call in `tasks.py` still read the global thresholds file (the same file for both regions today); Mumbai's stations will raise `sensor-data-stale:mumbai` if they stop reporting, by design.
+
 **Session 13, end state (2026-10-06 14:40 UTC = 20:10 IST): the "instrument" redesign is DEPLOYED and verified live.** The owner deployed backend `d1e6339` and merged and deployed air-clear PR #14. Checked on the live site: `/overview/history` answers (82 stations, 48 hours, every value has a category); in the owner's Chrome the region page shows 82 rows, 81 with stripes and 78 with forecast cells, no console errors, all four API calls 200, the three fonts load, no sideways scroll; on the station page the CSS animations are applied and the particle canvas changes between two looks. The automated tab was hidden, so nobody has yet watched the animations play from start to finish: the owner's own look is the check. Where the bullets below say "not deployed" or "waits", this paragraph is the newer truth.
 
 **Session 13 as built (2026-10-06, ~14:00 UTC = 19:30 IST):**
