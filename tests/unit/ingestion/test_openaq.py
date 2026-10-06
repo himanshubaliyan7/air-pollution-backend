@@ -114,7 +114,11 @@ def test_cpcb_no2_labelled_ppb_is_kept_as_ug_m3():
     feed matches the raw number); converting them overstated NO2 by 1.88x."""
     responses = {
         "/locations/111": FakeResponse(
-            {"id": 111, "sensors": [{"id": 9002, "parameter": {"name": "no2", "units": "ppb"}}]}
+            {
+                "id": 111,
+                "coordinates": {"latitude": 28.6, "longitude": 77.2},  # inside Delhi NCR, where the rule was verified
+                "sensors": [{"id": 9002, "parameter": {"name": "no2", "units": "ppb"}}],
+            }
         ),
         "/sensors/9002/hours": FakeResponse(
             {
@@ -143,7 +147,7 @@ def test_cpcb_no2_labelled_ppb_is_kept_as_ug_m3():
 
 
 def test_only_the_known_mislabel_is_corrected():
-    assert declared_unit(Pollutant.NO2, "ppb") == CANONICAL_UNIT
+    assert declared_unit(Pollutant.NO2, "ppb", 28.6, 77.2) == CANONICAL_UNIT
     assert declared_unit(Pollutant.NO2, "µg/m³") == "µg/m³"
     assert declared_unit(Pollutant.PM25, "ppb") == "ppb"  # still dropped by the loader, not relabelled
 
