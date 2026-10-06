@@ -1,145 +1,175 @@
-"""Are the units of a region's stored OpenAQ readings right? (read-only, owner-run)
+"""Are a region's OpenAQ unit labels right? (read-only, owner-run, makes OpenAQ requests)
 
 Why: OpenAQ labelled Delhi's CPCB NO2 "ppb" although the values were ug/m3, and
 converting the label overstated stored NO2 by 1.88x for five days. For any other
-region the label is unverified, so the ingestion drops "ppb" NO2 there
-(ingestion.sources.openaq.MISLABEL_VERIFIED_REGIONS) until this check says which
-reading is true.
+region the label is unverified, so ingestion SKIPS "ppb" NO2 there
+(ingestion.sources.openaq.MISLABEL_VERIFIED_REGIONS) and nothing is stored to
+compare. This check therefore fetches the readings itself, straight from OpenAQ.
 
-What: for each station in the region, inverts CPCB's hourly AQI sub-index (from
-the feed, stored in station_aqi_snapshots) back to a concentration through the
-CPCB breakpoints and divides it by the stored OpenAQ concentration. Reads, per
-pollutant, the median ratio feed / stored, pooled and per station:
-  ~1.00  the stored value is in ug/m3 and agrees with CPCB
-  ~0.53  stored is 1.88x too high (a ppb conversion of a value that was ug/m3)
-  ~1.88  stored is 1.88x too low (a ppb label that is really ug/m3, not relabelled)
-CPCB's hour and OpenAQ's hour are offset by an unknown amount of half hours, so
-the ratio is shown for each offset (as in cpcb_subindex_study.py) and the offset
-where the most readings agree within 10% is used for the per-station lines.
-Wait for a day or more of data after the first hourly runs; a station with no
-stored NO2 is listed as unverifiable (the ingestion drops unverified ppb NO2).
-Nothing is written.
+What: for a sample of the region's active stations (default 8, those with a CPCB
+hourly sub-index stored in the last day) it fetches the last 24 hours of NO2 and
+PM2.5 with the unit label OpenAQ gives (at most 3 requests per station, paced by
+the OpenAQ source class), and compares, per pollutant, the raw value and the
+value converted with that label (ppb -> ug/m3 x 1.88 for NO2) against the
+concentration derived from CPCB's hourly sub-index in station_aqi_snapshots (the
+comparison of scripts/cpcb_subindex_study.py). CPCB's hour and OpenAQ's hour are
+offset by an unknown number of half hours, so the offset with the tightest
+agreement over all pairs is used. Prints, per pollutant, the pairs compared, the
+median ratio raw/CPCB and converted/CPCB with interquartile range, and a
+conclusion. Writes nothing. OpenAQ's CPCB relay trails by hours, so right after
+seeding there may be few overlapping hours: re-run the next day.
 
-Run inside the Airflow scheduler container:
+How to act on the conclusion (NO2 matters; PM2.5 is the control and should say
+"stored label is right"):
+  "label says ppb but values are ug/m3"  OpenAQ's NO2 label is wrong here as in
+      Delhi: add the region id to MISLABEL_VERIFIED_REGIONS in
+      ingestion/sources/openaq.py (the value is then stored as is).
+  "stored label is right"  the label is true (a genuine ppb sensor). Do not add the
+      region to MISLABEL_VERIFIED_REGIONS. Note that ingestion today SKIPS ppb NO2
+      outside the verified list rather than converting it, so a genuine-ppb region
+      needs a small code change first (declared_unit returning the label, so the
+      ppb conversion applies): report the result instead of guessing.
+  "not enough overlapping hours"  decide nothing; run again later or raise --limit.
+  "values match neither"  neither reading matches CPCB: do not touch anything.
+
+Run inside the Airflow scheduler container (the scripts package is not in the image):
     sudo docker exec -i docker-airflow-scheduler-1 python - < scripts/mumbai_unit_check.py
-Optional args after "python -": --region mumbai --since 2026-10-07
+Optional args after "python -": --region mumbai --limit 8
 """
 
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
 from sqlalchemy import select
 
-from common.constants import Pollutant, SensorSourceName
+from common.config import get_settings
+from common.constants import Pollutant
 from common.regions import get_region
-from db.models import RawSensorReading, Station, StationAqiSnapshot
-from db.session import get_session
-from models.exceedance import load_thresholds
 from common.subindex import FEED_IDS, inverter
+from db.models import Station, StationAqiSnapshot
+from db.session import get_session
+from ingestion.config import ACTIVE_SOURCE, SENSOR_SOURCE_REGISTRY
+from ingestion.units import to_canonical
 
 OFFSET_STEPS = range(-8, 5)  # half hours between CPCB's lastupdate and the start of OpenAQ's hour
 MIN_PAIRS = 10
-MIN_CONCENTRATION = 5.0  # ratios of near-zero values are noise
+MIN_CONCENTRATION = 5.0  # ratios against near-zero concentrations are noise
+TOLERANCE = 0.10
+PPB_FACTOR = 1.882  # NO2 ug/m3 per ppb, as ingestion.units
+
+Pair = tuple[float, float, float, str]  # cpcb ug/m3, raw value, converted ug/m3, unit label
 
 
 def half_hour_key(ts: datetime) -> int:
     return round(ts.timestamp() / 1800)
 
 
-def ratios_by_offset(pairs_by_offset: dict[int, list[tuple[float, float]]]) -> dict[int, np.ndarray]:
-    """offset -> array of feed / stored for pairs where the stored value is not near zero."""
-    out = {}
-    for step, pairs in pairs_by_offset.items():
-        usable = [f / s for f, s in pairs if s >= MIN_CONCENTRATION]
-        if len(usable) >= MIN_PAIRS:
-            out[step] = np.array(usable)
+def _centred(ratios: np.ndarray, centre: float) -> bool:
+    return abs(float(np.median(ratios)) / centre - 1) <= TOLERANCE
+
+
+def best_offset(pairs_by_offset: dict[int, list[Pair]]) -> int | None:
+    """The offset where most raw/CPCB ratios sit within 10% of 1 or of a ppb/ug/m3 mix-up
+    (a unit error is as informative as a match, so the tightest cluster picks the offset)."""
+    def tight(pairs: list[Pair]) -> float:
+        r = np.array([raw / c for c, raw, _, _ in pairs])
+        return max(np.mean(np.abs(r / k - 1) <= TOLERANCE) for k in (1.0, 1 / PPB_FACTOR, PPB_FACTOR))
+    usable = {k: v for k, v in pairs_by_offset.items() if len(v) >= MIN_PAIRS}
+    return max(usable, key=lambda k: tight(usable[k]), default=None)
+
+
+def conclusion(pairs: list[Pair]) -> str:
+    if len(pairs) < MIN_PAIRS:
+        return "not enough overlapping hours"
+    raw = np.array([r / c for c, r, _, _ in pairs])
+    conv = np.array([v / c for c, _, v, _ in pairs])
+    ppb = Counter(label for *_, label in pairs).most_common(1)[0][0].strip() == "ppb"
+    if ppb and _centred(raw, 1.0):
+        return "label says ppb but values are ug/m3"
+    if _centred(conv, 1.0):
+        return "stored label is right"
+    return "values match neither (do not act on this)"
+
+
+def quartiles(r: np.ndarray) -> str:
+    return f"median {np.median(r):.3f} IQR {np.percentile(r, 25):.3f}-{np.percentile(r, 75):.3f}"
+
+
+def summarise(pollutant: Pollutant, pairs_by_offset: dict[int, list[Pair]]) -> list[str]:
+    best = best_offset(pairs_by_offset)
+    pairs = pairs_by_offset.get(best, []) if best is not None else []
+    head = f"== {pollutant.value}: {len(pairs)} pairs compared"
+    if len(pairs) < MIN_PAIRS:
+        return [head, f"  conclusion: {conclusion(pairs)}"]
+    raw = np.array([r / c for c, r, _, _ in pairs])
+    conv = np.array([v / c for c, _, v, _ in pairs])
+    labels = dict(Counter(label for *_, label in pairs))
+    return [
+        f"{head} (offset {best / 2:+.1f}h, labels {labels})",
+        f"  raw / CPCB        {quartiles(raw)}",
+        f"  converted / CPCB  {quartiles(conv)}",
+        f"  conclusion: {conclusion(pairs)}",
+    ]
+
+
+def pair_up(snaps, rows: dict[tuple[str, Pollutant], list], thresholds: dict) -> dict[Pollutant, dict[int, list[Pair]]]:
+    """snaps: CPCB snapshots; rows: (station_id, pollutant) -> [(hour, value, label)]."""
+    out: dict[Pollutant, dict[int, list[Pair]]] = {p: defaultdict(list) for p in FEED_IDS.values()}
+    for feed_id, pollutant in FEED_IDS.items():
+        invert, _ = inverter(thresholds["pollutants"][pollutant.value]["breakpoints"])
+        for s in (x for x in snaps if x.pollutant_id == feed_id):
+            hours = {half_hour_key(h): (v, lab) for h, v, lab in rows.get((s.station_id, pollutant), [])}
+            cpcb, capped = invert(s.sub_index_hourly)
+            if capped or cpcb < MIN_CONCENTRATION:
+                continue
+            for step in OFFSET_STEPS:
+                hit = hours.get(half_hour_key(s.source_updated_at) + step)
+                converted = to_canonical(pollutant, *hit) if hit else None
+                if hit and converted:
+                    out[pollutant][step].append((cpcb, hit[0], converted[0], hit[1]))
     return out
-
-
-def best_offset(ratios: dict[int, np.ndarray]) -> int | None:
-    """The offset where the most ratios are within 10% of 1, else of 0.53 / 1.88 (a unit
-    error is as informative as a match, so the offset is picked by the tightest cluster)."""
-    def tight(r: np.ndarray) -> float:
-        return max(np.mean(np.abs(r / c - 1) <= 0.10) for c in (1.0, 1 / 1.882, 1.882))
-    return max(ratios, key=lambda k: tight(ratios[k]), default=None)
-
-
-def verdict(median: float) -> str:
-    for centre, text in ((1.0, "units agree"), (1 / 1.882, "stored ~1.88x TOO HIGH"), (1.882, "stored ~1.88x TOO LOW")):
-        if abs(median / centre - 1) <= 0.10:
-            return text
-    return "no clear unit pattern"
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--region", default="mumbai")
-    parser.add_argument("--since", help="UTC date, default 3 days ago")
+    parser.add_argument("--limit", type=int, default=8, help="stations to sample")
     args = parser.parse_args()
     region = get_region(args.region)
     if region is None:
         raise SystemExit(f"unknown region {args.region!r}")
-    since = (datetime.fromisoformat(args.since) if args.since else datetime.now() - timedelta(days=3)).replace(tzinfo=timezone.utc)
-    thresholds = load_thresholds()
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(hours=24)
 
     with get_session() as session:
-        stations = [s for s in session.execute(select(Station).where(Station.is_active)).scalars() if region.contains(s.lat, s.lon)]
-        ids = [s.station_id for s in stations]
         snaps = session.execute(
             select(StationAqiSnapshot).where(
-                StationAqiSnapshot.station_id.in_(ids), StationAqiSnapshot.pollutant_id.in_(list(FEED_IDS)),
-                StationAqiSnapshot.source_updated_at >= since, StationAqiSnapshot.sub_index_hourly.isnot(None),
+                StationAqiSnapshot.pollutant_id.in_(list(FEED_IDS)),
+                StationAqiSnapshot.source_updated_at >= start - timedelta(hours=2),
+                StationAqiSnapshot.sub_index_hourly.isnot(None),
             )
         ).scalars().all()
-        readings = session.execute(
-            select(RawSensorReading.station_id, RawSensorReading.pollutant, RawSensorReading.observed_at, RawSensorReading.value)
-            .where(
-                RawSensorReading.station_id.in_(ids), RawSensorReading.source == SensorSourceName.OPENAQ,
-                RawSensorReading.observed_at >= since - timedelta(hours=6),
-            )
-        ).all()
+        with_cpcb = {s.station_id for s in snaps}
+        stations = [
+            s for s in session.execute(select(Station).where(Station.is_active).order_by(Station.station_id)).scalars()
+            if region.contains(s.lat, s.lon) and s.station_id in with_cpcb
+        ][: args.limit]
+    snaps = [s for s in snaps if s.station_id in {x.station_id for x in stations}]
+    print(f"region {region.id}: {len(stations)} sampled stations with a CPCB hourly sub-index in the last day")
+    if not stations:
+        print("nothing to compare: no active station of this region has a CPCB snapshot yet (wait for ingestion runs)")
+        return
 
-    series: dict[tuple[str, Pollutant], dict[int, float]] = defaultdict(dict)
-    for station_id, pollutant, observed_at, value in readings:
-        series[(station_id, pollutant)][half_hour_key(observed_at)] = value
-    print(f"region {region.id}: {len(stations)} active stations, {len(snaps)} CPCB snapshots since {since:%Y-%m-%d %H:%M}, "
-          f"{len(readings)} stored OpenAQ readings")
-
-    for feed_id, pollutant in FEED_IDS.items():
-        invert, _ = inverter(thresholds["pollutants"][pollutant.value]["breakpoints"])
-        pooled: dict[int, list] = defaultdict(list)
-        per_station: dict[str, dict[int, list]] = defaultdict(lambda: defaultdict(list))
-        for s in (x for x in snaps if x.pollutant_id == feed_id):
-            feed_value, capped = invert(s.sub_index_hourly)
-            hours = series.get((s.station_id, pollutant))
-            if capped or not hours:
-                continue
-            for step in OFFSET_STEPS:
-                stored = hours.get(half_hour_key(s.source_updated_at) + step)
-                if stored is not None:
-                    pooled[step].append((feed_value, stored))
-                    per_station[s.station_id][step].append((feed_value, stored))
-        with_data = {sid for (sid, p) in series if p == pollutant}
-        print(f"\n== {pollutant.value}: {len(with_data)} of {len(stations)} stations have stored OpenAQ readings")
-        if not with_data:
-            print("  nothing to compare: no stored OpenAQ readings (for NO2 that is also what an unverified ppb label looks like)")
-            continue
-        ratios = ratios_by_offset(pooled)
-        best = best_offset(ratios)
-        if best is None:
-            print(f"  fewer than {MIN_PAIRS} comparable hours at every offset; wait for more data")
-            continue
-        for step, r in sorted(ratios.items()):
-            print(f"  offset {step / 2:+.1f}h  n={len(r):4d}  ratio med={np.median(r):.3f} IQR={np.percentile(r, 25):.3f}-{np.percentile(r, 75):.3f}"
-                  f"{'   <- used below' if step == best else ''}")
-        print(f"  pooled at {best / 2:+.1f}h: median {np.median(ratios[best]):.3f} -> {verdict(float(np.median(ratios[best])))}")
-        names = {s.station_id: s.name for s in stations}
-        for sid, by_step in sorted(per_station.items()):
-            one = ratios_by_offset({best: by_step.get(best, [])}).get(best)
-            if one is not None:
-                print(f"    {names[sid][:44]:44s} n={len(one):3d} median {np.median(one):.3f}  {verdict(float(np.median(one)))}")
+    source = SENSOR_SOURCE_REGISTRY[ACTIVE_SOURCE](api_key=get_settings().openaq_api_key)
+    rows: dict[tuple[str, Pollutant], list] = {}
+    for st in stations:
+        for pollutant, hours in source.fetch_raw_hours(st.source_location_id, list(FEED_IDS.values()), start, end).items():
+            rows[(st.station_id, pollutant)] = hours
+    pairs = pair_up(snaps, rows, region.thresholds())
+    for pollutant in FEED_IDS.values():
+        print("\n".join(summarise(pollutant, pairs[pollutant])))
 
 
 if __name__ == "__main__":

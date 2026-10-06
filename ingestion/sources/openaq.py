@@ -235,6 +235,25 @@ class OpenAQSource(SensorSource):
         self._location_coords[location_id] = (coords.get("latitude"), coords.get("longitude"))
         return {p: sid for p, sid in sensor_ids.items() if p in pollutants}
 
+    def fetch_raw_hours(
+        self, location_id: str, pollutants: list[Pollutant], start: datetime, end: datetime
+    ) -> dict[Pollutant, list[tuple[datetime, float, str]]]:
+        """(hour, value, unit label) exactly as OpenAQ states them: no relabel, no
+        skipping. For read-only unit checks (scripts/mumbai_unit_check.py); one
+        /locations/{id} request plus one /hours request per pollutant."""
+        window = {"datetime_from": start.astimezone(timezone.utc).isoformat(), "datetime_to": end.astimezone(timezone.utc).isoformat()}
+        out: dict[Pollutant, list[tuple[datetime, float, str]]] = {}
+        for pollutant, sensor_id in self._resolve_sensor_ids(location_id, pollutants).items():
+            rows = []
+            for row in self._paginate(f"/sensors/{sensor_id}/hours", window):
+                raw = ((row.get("period") or {}).get("datetimeFrom") or {}).get("utc")
+                if row.get("value") is None or not raw:
+                    continue
+                hour = datetime.fromisoformat(raw.replace("Z", "+00:00")).replace(minute=0, second=0, microsecond=0)
+                rows.append((hour, float(row["value"]), (row.get("parameter") or {}).get("units", "")))
+            out[pollutant] = rows
+        return out
+
     def fetch_readings(
         self,
         *,

@@ -398,3 +398,18 @@ def test_rejected_api_key_fails_loudly_instead_of_being_skipped_per_station():
             start=datetime(2026, 9, 20, 12, tzinfo=timezone.utc), end=datetime(2026, 9, 20, 14, tzinfo=timezone.utc),
         )
     assert len(session.calls) == 1  # no retries, and it did not carry on to the next station
+
+
+def test_fetch_raw_hours_keeps_the_label_openaq_gives_and_costs_three_requests():
+    """The unit check needs the NO2 hours the ingestion would skip (Mumbai, "ppb")."""
+    hour = {"value": 12.0, "parameter": {"units": "ppb"}, "period": {"datetimeFrom": {"utc": "2026-10-07T00:30:00Z"}}}
+    session = FakeSession({
+        "/locations/501": FakeResponse({"id": 501, "coordinates": {"latitude": 19.06, "longitude": 72.86}, "sensors": [
+            {"id": 1, "parameter": {"name": "no2"}}, {"id": 2, "parameter": {"name": "pm25"}}]}),
+        "/sensors/1/hours": FakeResponse({"meta": {"found": 1}, "results": [hour]}),
+        "/sensors/2/hours": FakeResponse({"meta": {"found": 0}, "results": []}),
+    })
+    source = OpenAQSource(api_key="k", session=session)
+    out = source.fetch_raw_hours("501", [Pollutant.NO2, Pollutant.PM25], datetime(2026, 10, 7, tzinfo=timezone.utc), datetime(2026, 10, 8, tzinfo=timezone.utc))
+    assert out == {Pollutant.NO2: [(datetime(2026, 10, 7, 0, 0, tzinfo=timezone.utc), 12.0, "ppb")], Pollutant.PM25: []}
+    assert len(session.calls) == 3
