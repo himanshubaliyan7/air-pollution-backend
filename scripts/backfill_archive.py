@@ -7,6 +7,11 @@ come from one instrument. Rows are upserted exactly like hourly ingestion.
 Usage (inside the Airflow scheduler container):
     python -m scripts.backfill_archive --start 2025-10-01 --end 2026-03-23 --dry-run
     python -m scripts.backfill_archive --start 2025-10-01 --end 2026-03-23
+    python -m scripts.backfill_archive --region mumbai --start 2026-04-01 --end 2026-09-30 --dry-run
+    python -m scripts.backfill_archive --station openaq:8118 --start 2026-04-01 --end 2026-04-30
+
+A station needs a stored OpenAQ reading first (that is where its sensor ids come
+from), so a newly seeded station is skipped until one hourly ingestion has run.
 """
 
 import argparse
@@ -17,8 +22,9 @@ from datetime import date, timedelta
 
 from sqlalchemy import func, select
 
-from common.constants import Pollutant
+from common.constants import Pollutant, SensorSourceName
 from common.logging_conf import configure_logging
+from common.regions import get_region
 from db.models import RawSensorReading
 from db.session import get_session
 from ingestion.config import ACTIVE_SOURCE
@@ -30,25 +36,44 @@ logger = logging.getLogger(__name__)
 
 
 def live_sensor_ids(session) -> dict[str, dict[Pollutant, int]]:
-    """station_id -> {pollutant: sensor id} from the newest stored reading."""
+    """station_id -> {pollutant: sensor id} from the newest stored OpenAQ reading.
+    Only OpenAQ rows carry a sensor id ("<sensor>:<time>"); a CPCB-sourced row's
+    source_record_id starts with "cpcb:" and is not one."""
+    is_openaq = RawSensorReading.source == SensorSourceName.OPENAQ
     newest = (
         select(RawSensorReading.station_id, RawSensorReading.pollutant, func.max(RawSensorReading.observed_at).label("t"))
+        .where(is_openaq)
         .group_by(RawSensorReading.station_id, RawSensorReading.pollutant)
         .subquery()
     )
     rows = session.execute(
-        select(RawSensorReading.station_id, RawSensorReading.pollutant, RawSensorReading.source_record_id).join(
+        select(RawSensorReading.station_id, RawSensorReading.pollutant, RawSensorReading.source_record_id)
+        .join(
             newest,
             (RawSensorReading.station_id == newest.c.station_id)
             & (RawSensorReading.pollutant == newest.c.pollutant)
             & (RawSensorReading.observed_at == newest.c.t),
         )
+        .where(is_openaq)
     ).all()
     out: dict[str, dict[Pollutant, int]] = {}
     for station_id, pollutant, record_id in rows:
-        if record_id and ":" in record_id:
-            out.setdefault(station_id, {})[pollutant] = int(record_id.split(":", 1)[0])
+        sensor_id = (record_id or "").split(":", 1)[0]
+        if sensor_id.isdigit():
+            out.setdefault(station_id, {})[pollutant] = int(sensor_id)
     return out
+
+
+def select_stations(stations, region_id: str | None = None, station_ids: list[str] | None = None) -> list:
+    """Stations inside a region's bbox and/or with one of the given station ids."""
+    if region_id is not None:
+        region = get_region(region_id)
+        if region is None:
+            raise ValueError(f"unknown region {region_id!r}")
+        stations = [s for s in stations if region.contains(s.lat, s.lon)]
+    if station_ids:
+        stations = [s for s in stations if s.station_id in set(station_ids)]
+    return list(stations)
 
 
 def main() -> None:
@@ -58,11 +83,14 @@ def main() -> None:
     parser.add_argument("--end", type=date.fromisoformat, required=True, help="inclusive")
     parser.add_argument("--dry-run", action="store_true", help="fetch and report coverage, write nothing")
     parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument("--region", help="only stations inside this region (config/regions.yaml id)")
+    parser.add_argument("--station", action="append", help="only this station_id (repeatable)")
     args = parser.parse_args()
 
     session = get_session()
     try:
-        stations = _active_stations(session)
+        stations = select_stations(_active_stations(session), args.region, args.station)
+        logger.info("%d stations selected", len(stations))
         sensors = live_sensor_ids(session)
         client = OpenAQArchiveClient()
         days = [args.start + timedelta(days=i) for i in range((args.end - args.start).days + 1)]
