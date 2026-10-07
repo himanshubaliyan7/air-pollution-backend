@@ -117,6 +117,9 @@ def deactivate_level_models(session: Session, station_id: str, pollutant: Pollut
             ModelRun.hyperparams["kind"].astext == "level_ratio",
         )
         .values(is_active=False)
+        # The Airflow image runs SQLAlchemy 1.4, which cannot evaluate the JSON filter in
+        # Python to synchronise the session and raises instead (Mumbai NO2, 2026-10-07).
+        .execution_options(synchronize_session=False)
     )
     session.commit()
     return result.rowcount
