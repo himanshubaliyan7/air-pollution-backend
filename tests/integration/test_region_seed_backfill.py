@@ -125,6 +125,45 @@ def test_live_sensor_ids_skips_a_station_that_only_has_cpcb_rows(db_session):
     assert backfill_archive.live_sensor_ids(db_session) == {}
 
 
+class _Station:
+    station_id, source_location_id = "openaq:m1", "m1"
+
+
+def test_sensor_lookup_prefers_the_stored_id_and_builds_no_api_client(monkeypatch):
+    monkeypatch.setattr(backfill_archive, "SENSOR_SOURCE_REGISTRY", {})  # any API use would raise KeyError
+    lookup = backfill_archive.SensorLookup({"openaq:m1": {Pollutant.PM25: 4242}})
+    assert lookup.for_station(_Station) == {Pollutant.PM25: 4242}
+
+
+def test_sensor_lookup_asks_openaq_for_a_station_with_no_stored_reading(monkeypatch):
+    """Mumbai, 2026-10-07: seeded after OpenAQ's CPCB relay stopped, so 45 of 46 stations had CPCB rows only."""
+    asked = []
+
+    class Source:
+        def __init__(self, api_key):
+            pass
+
+        def _resolve_sensor_ids(self, location_id, pollutants):
+            asked.append(location_id)
+            return {Pollutant.PM25: 99}
+
+    monkeypatch.setattr(backfill_archive, "SENSOR_SOURCE_REGISTRY", {backfill_archive.ACTIVE_SOURCE: Source})
+    assert backfill_archive.SensorLookup({}).for_station(_Station) == {Pollutant.PM25: 99}
+    assert asked == ["m1"]
+
+
+def test_sensor_lookup_skips_a_station_whose_openaq_lookup_fails(monkeypatch):
+    class Source:
+        def __init__(self, api_key):
+            pass
+
+        def _resolve_sensor_ids(self, location_id, pollutants):
+            raise RuntimeError("OpenAQ request failed after 5 retries")
+
+    monkeypatch.setattr(backfill_archive, "SENSOR_SOURCE_REGISTRY", {backfill_archive.ACTIVE_SOURCE: Source})
+    assert backfill_archive.SensorLookup({}).for_station(_Station) == {}
+
+
 def test_select_stations_filters_by_region_and_station_id(db_session):
     delhi = add_station(db_session, "d1")
     mumbai = add_station(db_session, "m1", lat=19.07, lon=72.88)

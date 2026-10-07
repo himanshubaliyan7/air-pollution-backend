@@ -1,8 +1,10 @@
 """Backfill sensor history from OpenAQ's public S3 archive (no API quota used).
 
 For each active station, uses the same sensor per pollutant the live pipeline
-ingests (read from the stored source_record_id), so history and live data
-come from one instrument. Rows are upserted exactly like hourly ingestion.
+ingests, so history and live data come from one instrument: read from the stored
+source_record_id, or, for a station with no stored OpenAQ reading, asked from
+OpenAQ (one API request per such station). Rows are upserted exactly like hourly
+ingestion.
 
 Usage (inside the Airflow scheduler container, where the scripts package is not in the image):
     sudo docker exec -i docker-airflow-scheduler-1 python - --start 2025-10-01 --end 2026-03-23 --dry-run < scripts/backfill_archive.py
@@ -10,8 +12,9 @@ Usage (inside the Airflow scheduler container, where the scripts package is not 
     ... python - --station openaq:8118 --start 2026-04-01 --end 2026-04-30 < scripts/backfill_archive.py
 (from a checkout: python -m scripts.backfill_archive ...)
 
-A station needs a stored OpenAQ reading first (that is where its sensor ids come
-from), so a newly seeded station is skipped until one hourly ingestion has run.
+Why the API fallback: OpenAQ stopped relaying India's CPCB network on 2026-10-02,
+so a station seeded after that (all of Mumbai, 2026-10-06) has CPCB rows only and
+would never get a stored sensor id, while its history is in the archive.
 """
 
 import argparse
@@ -20,14 +23,16 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
+import requests
 from sqlalchemy import func, select
 
+from common.config import get_settings
 from common.constants import Pollutant, SensorSourceName
 from common.logging_conf import configure_logging
 from common.regions import select_stations
 from db.models import RawSensorReading
 from db.session import get_session
-from ingestion.config import ACTIVE_SOURCE
+from ingestion.config import ACTIVE_SOURCE, SENSOR_SOURCE_REGISTRY
 from ingestion.loaders.sensor_loader import load_sensor_readings
 from ingestion.sources.openaq_archive import OpenAQArchiveClient, parse_day
 from orchestration.plugins.common.tasks import _active_stations
@@ -64,6 +69,28 @@ def live_sensor_ids(session) -> dict[str, dict[Pollutant, int]]:
     return out
 
 
+class SensorLookup:
+    """Sensor ids per station: the stored ones, else OpenAQ's own answer. The API
+    client is built on first need, so a run that needs no lookup needs no key."""
+
+    def __init__(self, stored: dict[str, dict[Pollutant, int]]):
+        self._stored = stored
+        self._source = None
+
+    def for_station(self, station) -> dict[Pollutant, int]:
+        stored = self._stored.get(station.station_id)
+        if stored:
+            return stored
+        if self._source is None:
+            self._source = SENSOR_SOURCE_REGISTRY[ACTIVE_SOURCE](api_key=get_settings().openaq_api_key)
+        try:
+            # The lookup fetch_readings itself uses; called directly so this script needs no image rebuild.
+            return self._source._resolve_sensor_ids(station.source_location_id, list(Pollutant))
+        except (requests.HTTPError, RuntimeError) as exc:  # one station failing must not stop the rest
+            logger.warning("%s: sensor lookup at OpenAQ failed: %s", station.station_id, exc)
+            return {}
+
+
 def main() -> None:
     configure_logging()
     parser = argparse.ArgumentParser(description=__doc__)
@@ -79,15 +106,15 @@ def main() -> None:
     try:
         stations = select_stations(_active_stations(session), args.region, args.station)
         logger.info("%d stations selected", len(stations))
-        sensors = live_sensor_ids(session)
+        sensors = SensorLookup(live_sensor_ids(session))
         client = OpenAQArchiveClient()
         days = [args.start + timedelta(days=i) for i in range((args.end - args.start).days + 1)]
         coverage: Counter = Counter()
         total = 0
         for station in stations:
-            sensor_ids = sensors.get(station.station_id)
+            sensor_ids = sensors.for_station(station)
             if not sensor_ids:
-                logger.warning("%s: no stored sensor id, skipped", station.station_id)
+                logger.warning("%s: no sensor id, stored or at OpenAQ, skipped", station.station_id)
                 continue
             loc = station.source_location_id
             with ThreadPoolExecutor(args.workers) as pool:
