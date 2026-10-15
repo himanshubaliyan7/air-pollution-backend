@@ -157,7 +157,7 @@ def test_mislabel_rule_has_a_margin_around_the_verified_region():
     coordinates for them can land just outside it and must still get the rule."""
     assert declared_unit(Pollutant.NO2, "ppb", 28.19, 76.59) == CANONICAL_UNIT  # just outside the bbox corner
     assert declared_unit(Pollutant.NO2, "ppb", 28.10, 76.50) == CANONICAL_UNIT  # 0.1 degree outside
-    assert declared_unit(Pollutant.NO2, "ppb", 19.06, 72.86) is None  # Mumbai: unverified, skipped
+    assert declared_unit(Pollutant.NO2, "ppb", 12.97, 77.59) is None  # Bengaluru: unverified, skipped
     assert declared_unit(Pollutant.NO2, "ppb", 27.0, 77.2) is None  # 1.2 degrees south of the margin
     assert declared_unit(Pollutant.NO2, "ppb") is None  # no coordinates
 

@@ -50,7 +50,9 @@ _MISLABELLED_UNITS = {(Pollutant.NO2, "ppb"): CANONICAL_UNIT}
 # truth) and NOT converted either (a mislabelled one would be stored at 1.88x, which
 # happened to Delhi for five days): it is skipped and counted, so the hour reads as
 # missing. After scripts/mumbai_unit_check.py shows ratio ~1.00 for a region, add it here.
-MISLABEL_VERIFIED_REGIONS = frozenset({"delhi-ncr"})
+# Mumbai: raw/CPCB median 1.00 (IQR 0.96-1.05) over 219 NO2 pairs at 8 stations,
+# 2026-10-08 18:00 to 10-11 18:00 UTC; ppb-converted 1.88 (checked 2026-10-15).
+MISLABEL_VERIFIED_REGIONS = frozenset({"delhi-ncr", "mumbai"})
 
 
 # OpenAQ's coordinates for a location can differ slightly from ours, and three real Delhi

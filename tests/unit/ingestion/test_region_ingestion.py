@@ -16,6 +16,7 @@ from tests.unit.ingestion.test_openaq import FakeResponse, FakeSession
 
 DELHI = (28.6, 77.2)
 MUMBAI = (19.07, 72.88)
+BENGALURU = (12.97, 77.59)  # in no region
 
 
 def test_region_search_area_reads_the_yaml_and_delhi_aliases_are_unchanged():
@@ -60,11 +61,11 @@ def test_list_stations_leaves_city_and_state_empty_unless_told():
 
 
 def test_ppb_no2_rule_applies_only_in_verified_regions():
-    assert MISLABEL_VERIFIED_REGIONS == {"delhi-ncr"}
+    assert MISLABEL_VERIFIED_REGIONS == {"delhi-ncr", "mumbai"}
     assert declared_unit(Pollutant.NO2, "ppb", *DELHI) == CANONICAL_UNIT
-    assert declared_unit(Pollutant.NO2, "ppb", *MUMBAI) is None  # unverified: skipped, not converted
+    assert declared_unit(Pollutant.NO2, "ppb", *MUMBAI) == CANONICAL_UNIT  # verified 2026-10-15
     assert declared_unit(Pollutant.NO2, "ppb") is None  # no coordinates: unverified
-    assert declared_unit(Pollutant.NO2, "ppb", 12.97, 77.59) is None  # outside every region
+    assert declared_unit(Pollutant.NO2, "ppb", *BENGALURU) is None  # unverified: skipped, not converted
     assert declared_unit(Pollutant.NO2, "ug/m3", *MUMBAI) == "ug/m3"  # a correct label is untouched
     assert declared_unit(Pollutant.PM25, "µg/m³", *MUMBAI) == "µg/m³"
 
@@ -101,14 +102,15 @@ def _fetch(lat_lon, caplog):
         )
 
 
-def test_mumbai_ppb_no2_is_skipped_with_a_counted_warning_and_pm25_still_flows(caplog):
-    readings = _fetch(MUMBAI, caplog)
+def test_unverified_ppb_no2_is_skipped_with_a_counted_warning_and_pm25_still_flows(caplog):
+    readings = _fetch(BENGALURU, caplog)
     assert [(r.pollutant, r.value) for r in readings] == [(Pollutant.PM25, 60.0)]  # NO2 reads as missing, not as 20/22
     assert any("Skipped 2 no2 hours at location 7" in m for m in caplog.messages)
 
 
-def test_delhi_ppb_no2_is_still_relabelled_and_not_counted_as_skipped(caplog):
-    readings = _fetch(DELHI, caplog)
+@pytest.mark.parametrize("where", [DELHI, MUMBAI])
+def test_verified_ppb_no2_is_relabelled_and_not_counted_as_skipped(where, caplog):
+    readings = _fetch(where, caplog)
     assert sorted((r.pollutant.value, r.value, r.unit) for r in readings) == [
         ("no2", 20.0, CANONICAL_UNIT), ("no2", 22.0, CANONICAL_UNIT), ("pm25", 60.0, CANONICAL_UNIT),
     ]
@@ -125,9 +127,10 @@ def _archive_csv(lat, lon):
 
 def test_archive_applies_the_same_rule_from_the_rows_coordinates(caplog):
     with caplog.at_level(logging.WARNING, logger="ingestion.sources.openaq_archive"):
-        mumbai = parse_day(_archive_csv(*MUMBAI), "9")
-    assert [r.pollutant for r in mumbai] == [Pollutant.PM25]
+        elsewhere = parse_day(_archive_csv(*BENGALURU), "9")
+    assert [r.pollutant for r in elsewhere] == [Pollutant.PM25]
     assert any("skipped 1 no2 hours" in m for m in caplog.messages)
-    delhi = parse_day(_archive_csv(*DELHI), "9")
-    assert sorted(r.pollutant.value for r in delhi) == ["no2", "pm25"]
-    assert next(r for r in delhi if r.pollutant is Pollutant.NO2).unit == CANONICAL_UNIT
+    for where in (DELHI, MUMBAI):
+        rows = parse_day(_archive_csv(*where), "9")
+        assert sorted(r.pollutant.value for r in rows) == ["no2", "pm25"]
+        assert next(r for r in rows if r.pollutant is Pollutant.NO2).unit == CANONICAL_UNIT
