@@ -216,6 +216,28 @@ def test_evaluation_scores_a_daily_forecast_against_the_days_mean(db_session, mo
     assert tasks.evaluate_recent_forecasts() == 0
 
 
+def test_evaluation_scores_only_the_verdict_shown_the_evening_before(db_session, monkeypatch, daily_target):
+    station_id = add_station(db_session, "eval-runs")
+    day_start = MIDNIGHT_18TH
+    for h in range(24):
+        add_reading(db_session, station_id, day_start + timedelta(minutes=30, hours=h), value=120.0)
+    model_id = add_model_run(db_session, station_id)
+    # Hourly runs on the 17th, all for the 18th: early ones said go, the last one flagged it.
+    for hours_before, flag, point in [(20, False, 40.0), (10, False, 60.0), (2, True, 110.0)]:
+        db_session.add(Forecast(
+            station_id=station_id, pollutant=Pollutant.PM25, model_id=model_id,
+            forecast_made_at=day_start - timedelta(hours=hours_before), target_time=day_start, horizon_hours=24,
+            point_forecast=point, quantile_low=point - 10, quantile_high=point + 10,
+            exceedance_probability=0.9 if flag else 0.1, exceedance_flag=flag, target=DAILY,
+        ))
+    db_session.commit()
+    monkeypatch.setattr(tasks, "datetime", fixed_datetime(day_start + timedelta(hours=25)))
+
+    assert tasks.evaluate_recent_forecasts() == 1
+    row = db_session.query(ExceedanceEvaluation).one()
+    assert (row.n_exceedance_days_actual, row.recall, row.mae) == (1, 1.0, pytest.approx(10.0))
+
+
 def test_digest_legend_explains_the_verdicts_of_the_family_being_served(daily_target, monkeypatch):
     from alerting.digest import _legend
 

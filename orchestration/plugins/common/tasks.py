@@ -505,6 +505,20 @@ def _actuals_for_evaluation(session, station, pollutant, start: datetime, end: d
     }
 
 
+def _verdicts_shown(forecast_rows):
+    """One daily-mean row per target day: the last one made before the day
+    began, the verdict a school acted on (as /forecast/{id}/history shows it).
+    Every hourly run stores its own row for the same day, and scoring them all
+    counted each day about 24 times, mostly by runs a day older than the one shown."""
+    latest = {}
+    for r in forecast_rows:
+        if r.forecast_made_at < r.target_time:
+            kept = latest.get(r.target_time)
+            if kept is None or r.forecast_made_at > kept.forecast_made_at:
+                latest[r.target_time] = r
+    return list(latest.values())
+
+
 def evaluate_recent_forecasts(evaluation_window_days: int = 1) -> int:
     from db.models import ExceedanceEvaluation
 
@@ -536,6 +550,8 @@ def evaluate_recent_forecasts(evaluation_window_days: int = 1) -> int:
                             Forecast.target_time <= now - day,
                         )
                     ).scalars().all()
+                    if target is ForecastTarget.DAILY_MEAN:
+                        forecast_rows = _verdicts_shown(forecast_rows)
                     if not forecast_rows:
                         continue
 
