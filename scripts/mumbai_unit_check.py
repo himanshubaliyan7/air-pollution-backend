@@ -34,7 +34,7 @@ How to act on the conclusion (NO2 matters; PM2.5 is the control and should say
 
 Run inside the Airflow scheduler container (the scripts package is not in the image):
     sudo docker exec -i docker-airflow-scheduler-1 python - < scripts/mumbai_unit_check.py
-Optional args after "python -": --region mumbai --limit 8
+Optional args after "python -": --region mumbai --limit 8 --end 2026-10-11T18:00 --hours 72
 """
 
 import argparse
@@ -136,18 +136,22 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--region", default="mumbai")
     parser.add_argument("--limit", type=int, default=8, help="stations to sample")
+    parser.add_argument("--end", type=datetime.fromisoformat, default=None,
+                        help="window end, UTC (default now); for when OpenAQ's relay trails by days")
+    parser.add_argument("--hours", type=int, default=24, help="window length")
     args = parser.parse_args()
     region = get_region(args.region)
     if region is None:
         raise SystemExit(f"unknown region {args.region!r}")
-    end = datetime.now(timezone.utc)
-    start = end - timedelta(hours=24)
+    end = args.end.replace(tzinfo=timezone.utc) if args.end else datetime.now(timezone.utc)
+    start = end - timedelta(hours=args.hours)
 
     with get_session() as session:
         snaps = session.execute(
             select(StationAqiSnapshot).where(
                 StationAqiSnapshot.pollutant_id.in_(list(FEED_IDS)),
                 StationAqiSnapshot.source_updated_at >= start - timedelta(hours=2),
+                StationAqiSnapshot.source_updated_at <= end + timedelta(hours=2),
                 StationAqiSnapshot.sub_index_hourly.isnot(None),
             )
         ).scalars().all()
@@ -157,7 +161,7 @@ def main() -> None:
             if region.contains(s.lat, s.lon) and s.station_id in with_cpcb
         ][: args.limit]
     snaps = [s for s in snaps if s.station_id in {x.station_id for x in stations}]
-    print(f"region {region.id}: {len(stations)} sampled stations with a CPCB hourly sub-index in the last day")
+    print(f"region {region.id}: {len(stations)} sampled stations with a CPCB hourly sub-index, {start:%Y-%m-%d %H:%M} to {end:%Y-%m-%d %H:%M} UTC")
     if not stations:
         print("nothing to compare: no active station of this region has a CPCB snapshot yet (wait for ingestion runs)")
         return
