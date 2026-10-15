@@ -131,8 +131,28 @@ class _Station:
 
 def test_sensor_lookup_prefers_the_stored_id_and_builds_no_api_client(monkeypatch):
     monkeypatch.setattr(backfill_archive, "SENSOR_SOURCE_REGISTRY", {})  # any API use would raise KeyError
+    stored = {p: 4242 + i for i, p in enumerate(Pollutant)}
+    lookup = backfill_archive.SensorLookup({"openaq:m1": stored})
+    assert lookup.for_station(_Station) == stored
+
+
+def test_sensor_lookup_asks_openaq_only_for_the_pollutants_with_no_stored_id(monkeypatch):
+    """Mumbai, 2026-10-15: NO2 had been skipped until its unit was verified, so each
+    station stored a PM2.5 id only and the backfill found no NO2 at all."""
+    asked = []
+
+    class Source:
+        def __init__(self, api_key):
+            pass
+
+        def _resolve_sensor_ids(self, location_id, pollutants):
+            asked.append(set(pollutants))
+            return {Pollutant.PM25: 1, Pollutant.NO2: 77}
+
+    monkeypatch.setattr(backfill_archive, "SENSOR_SOURCE_REGISTRY", {backfill_archive.ACTIVE_SOURCE: Source})
     lookup = backfill_archive.SensorLookup({"openaq:m1": {Pollutant.PM25: 4242}})
-    assert lookup.for_station(_Station) == {Pollutant.PM25: 4242}
+    assert lookup.for_station(_Station) == {Pollutant.PM25: 4242, Pollutant.NO2: 77}  # the stored id wins
+    assert asked == [set(Pollutant) - {Pollutant.PM25}]
 
 
 def test_sensor_lookup_asks_openaq_for_a_station_with_no_stored_reading(monkeypatch):
@@ -162,6 +182,7 @@ def test_sensor_lookup_skips_a_station_whose_openaq_lookup_fails(monkeypatch):
 
     monkeypatch.setattr(backfill_archive, "SENSOR_SOURCE_REGISTRY", {backfill_archive.ACTIVE_SOURCE: Source})
     assert backfill_archive.SensorLookup({}).for_station(_Station) == {}
+    assert backfill_archive.SensorLookup({"openaq:m1": {Pollutant.PM25: 4242}}).for_station(_Station) == {Pollutant.PM25: 4242}
 
 
 def test_select_stations_filters_by_region_and_station_id(db_session):

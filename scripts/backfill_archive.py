@@ -78,17 +78,21 @@ class SensorLookup:
         self._source = None
 
     def for_station(self, station) -> dict[Pollutant, int]:
-        stored = self._stored.get(station.station_id)
-        if stored:
+        stored = self._stored.get(station.station_id, {})
+        # A pollutant with no stored id is asked for too: Mumbai's NO2 was skipped
+        # until its unit was verified, so its stations stored a PM2.5 id only.
+        missing = [p for p in Pollutant if p not in stored]
+        if not missing:
             return stored
         if self._source is None:
             self._source = SENSOR_SOURCE_REGISTRY[ACTIVE_SOURCE](api_key=get_settings().openaq_api_key)
         try:
             # The lookup fetch_readings itself uses; called directly so this script needs no image rebuild.
-            return self._source._resolve_sensor_ids(station.source_location_id, list(Pollutant))
+            found = self._source._resolve_sensor_ids(station.source_location_id, missing)
         except (requests.HTTPError, RuntimeError) as exc:  # one station failing must not stop the rest
             logger.warning("%s: sensor lookup at OpenAQ failed: %s", station.station_id, exc)
-            return {}
+            return stored
+        return {**found, **stored}
 
 
 def main() -> None:
