@@ -246,7 +246,10 @@ def main() -> None:
             continue
         series = pd.Series([v for _, v in readings], index=pd.DatetimeIndex([t for t, _ in readings], tz="UTC"))
         day_means = local_day_means(series.groupby(level=0).first(), tz_name)
-        X = prepare_X(features).dropna().drop(columns=SEASON_FEATURES, errors="ignore")
+        X = prepare_X(features)
+        # The level rule reads only the last-24h mean; a region with no weather
+        # (Mumbai) has empty weather columns, and dropna over them drops every row.
+        X = X.dropna().drop(columns=SEASON_FEATURES, errors="ignore") if with_models else X[[PERSISTENCE]].dropna()
         if X.empty:
             continue
         as_of_days = local_days(X.index, tz_name)
@@ -271,7 +274,8 @@ def main() -> None:
         y = np.concatenate([item[3][k] for item in loaded])
         weather = np.concatenate([item[4][k] for item in loaded])
         X_weather = X_all.assign(**{f"target_day_{name}": weather[:, i] for i, name in enumerate(TARGET_WEATHER)})
-        has_weather = ~np.isnan(weather).any(axis=1)
+        # The weather variants need the target day's weather; the level rule alone does not.
+        has_weather = ~np.isnan(weather).any(axis=1) if with_models else np.ones(len(weather), dtype=bool)
         target_days = as_of_all + np.timedelta64(k, "D")
         for fold, (start, end) in folds.items():
             # Every variant is scored on the same rows: those whose target day has weather.
