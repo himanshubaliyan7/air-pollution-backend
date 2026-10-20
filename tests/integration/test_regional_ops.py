@@ -111,9 +111,9 @@ def test_daily_drift_is_judged_per_region_and_names_it(db_session, two_regions):
         models[sid] = add_model_run(db_session, sid)
         db_session.query(ModelRun).filter_by(model_id=models[sid]).update({"target": "daily_mean"})
     recent = NOW - timedelta(days=1)
-    for _ in range(25):  # Delhi flags every bad day, Mumbai none: pooled recall would be 50%, no alarm
-        _evaluation(db_session, d, models[d], recent, True)
-        _evaluation(db_session, m, models[m], recent, False)
+    for i in range(25):  # Delhi flags every bad day, Mumbai none: pooled recall would be 50%, no alarm
+        _evaluation(db_session, add_station(db_session, f"d{i}", lat=DELHI_LAT, lon=DELHI_LON), models[d], recent, True)
+        _evaluation(db_session, add_station(db_session, f"m{i}", lat=MUMBAI_LAT, lon=MUMBAI_LON), models[m], recent, False)
     db_session.commit()
 
     message = tasks.daily_verdict_drift(db_session, NOW)

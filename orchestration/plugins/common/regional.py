@@ -47,3 +47,27 @@ def drift_by_region(rows, min_recall: float, min_days: int) -> list[tuple[str, f
             recall, days = evaluation.pooled_recall(region_rows)
             drifted.append((name, recall, days))
     return drifted
+
+
+def count_faults_by_region(rows, window_days: int) -> list[str]:
+    """What is wrong with the evaluation rows themselves, per region, before their recall
+    is believed. `rows` are (lat, lon, station_id, pollutant, computed_at,
+    n_exceedance_days_actual, recall). A nightly row covers one station, pollutant and day,
+    so a week holds at most pairs x days station-days and one row per pair and night;
+    more means rows were scored or stored more than once (2026-10: both happened)."""
+    per_region: dict[str, list] = defaultdict(list)
+    for lat, lon, *rest in rows:
+        per_region[station_region_name(lat, lon)].append(rest)
+    faults = []
+    for name, region_rows in sorted(per_region.items()):
+        pairs = {(sid, pol) for sid, pol, *_ in region_rows}
+        nights = {(sid, pol, computed_at.date()) for sid, pol, computed_at, *_ in region_rows}
+        counted = sum(n for *_, n, recall in region_rows if recall is not None)
+        possible = len(pairs) * window_days
+        repeated = len(region_rows) - len(nights)
+        if counted > possible or repeated:
+            faults.append(
+                f"{name}: {counted} station-days counted where {len(pairs)} station/pollutant pairs "
+                f"over {window_days} days allow at most {possible}; {repeated} rows repeat a pair's night"
+            )
+    return faults

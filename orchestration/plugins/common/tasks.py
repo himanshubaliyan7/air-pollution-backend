@@ -44,6 +44,7 @@ from models import evaluation, exceedance, predict, registry, train
 from models.daily import local_day_means, target_day_start
 from models.outlook import station_timezone
 from orchestration.plugins.common.regional import (
+    count_faults_by_region,
     drift_by_region,
     group_by_region,
     thresholds_for_station,
@@ -626,7 +627,9 @@ def daily_verdict_drift(session, now: datetime) -> str | None:
     from db.models import ExceedanceEvaluation
 
     rows = session.execute(
-        select(Station.lat, Station.lon, ExceedanceEvaluation.n_exceedance_days_actual, ExceedanceEvaluation.recall)
+        select(Station.lat, Station.lon, ExceedanceEvaluation.station_id, ExceedanceEvaluation.pollutant,
+               ExceedanceEvaluation.computed_at, ExceedanceEvaluation.n_exceedance_days_actual,
+               ExceedanceEvaluation.recall)
         .join(ModelRun, ModelRun.model_id == ExceedanceEvaluation.model_id)
         .join(Station, Station.station_id == ExceedanceEvaluation.station_id)
         .where(
@@ -635,13 +638,23 @@ def daily_verdict_drift(session, now: datetime) -> str | None:
             ExceedanceEvaluation.computed_at >= now - DAILY_DRIFT_WINDOW,
         )
     ).all()
-    drifted = drift_by_region(rows, DAILY_DRIFT_MIN_RECALL, DAILY_DRIFT_MIN_DAYS)
-    if not drifted:
-        return None
+    faults = count_faults_by_region(rows, DAILY_DRIFT_WINDOW.days)
+    drifted = drift_by_region([(r.lat, r.lon, r.n_exceedance_days_actual, r.recall) for r in rows],
+                              DAILY_DRIFT_MIN_RECALL, DAILY_DRIFT_MIN_DAYS)
     detail = "; ".join(
         f"{name}: only {recall:.0%} of the {days} station-days above the health threshold were flagged a day ahead"
         for name, recall, days in drifted
     )
+    if faults:
+        # The rows cannot be right, so neither is a recall pooled from them: say so first.
+        return (
+            "Daily verdict check: COUNTING FAULT in exceedance_evaluations, not model drift - "
+            + "; ".join(faults)
+            + ". Look for an evaluation that ran twice or rows scored before a fix, and fix the rows before reading "
+            "the recall." + (f" Recall as counted: {detail}." if detail else "")
+        )
+    if not drifted:
+        return None
     return (
         f"Daily verdict check failed over the last {DAILY_DRIFT_WINDOW.days} days (floor {DAILY_DRIFT_MIN_RECALL:.0%}) - "
         f"{detail}. "

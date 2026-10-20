@@ -318,29 +318,38 @@ def _add_evaluation(session, station_id, model_id, computed_at, *, flagged: bool
 
 def test_weekly_drift_check_counts_missed_days_of_the_daily_family_only(db_session):
     now = MIDNIGHT_18TH
-    station_id = add_station(db_session, "drift")
-    daily_model = add_model_run(db_session, station_id)
+    stations = [add_station(db_session, f"drift{i}") for i in range(25)]
+    daily_model = add_model_run(db_session, stations[0])
     db_session.query(ModelRun).filter_by(model_id=daily_model).update({"target": DAILY})
-    hourly_model = add_model_run(db_session, station_id, horizon=48)  # the hourly family, by default
-    recent = now - timedelta(days=1)
+    hourly_model = add_model_run(db_session, stations[0], horizon=48)  # the hourly family, by default
+    night = lambda k: now - timedelta(days=k)  # noqa: E731 - the nightly run k days ago
 
-    # 25 real bad days, 5 flagged: but hourly rows, old rows and longer horizons must not count.
-    for _ in range(25):
-        _add_evaluation(db_session, station_id, hourly_model, recent, flagged=False)
-        _add_evaluation(db_session, station_id, daily_model, now - timedelta(days=9), flagged=False)
-        _add_evaluation(db_session, station_id, daily_model, recent, flagged=False, horizon=48)
-        _add_evaluation(db_session, station_id, daily_model, recent, flagged=None)
+    # One row per station and night, as the nightly run writes them. Hourly rows, old rows
+    # and longer horizons must not count; a night below the threshold has no bad day.
+    for sid in stations:
+        _add_evaluation(db_session, sid, hourly_model, night(1), flagged=False)
+        _add_evaluation(db_session, sid, daily_model, night(9), flagged=False)
+        _add_evaluation(db_session, sid, daily_model, night(1), flagged=False, horizon=48)
+        _add_evaluation(db_session, sid, daily_model, night(1), flagged=None)
     db_session.commit()
     assert tasks.daily_verdict_drift(db_session, now) is None
 
-    for i in range(25):
-        _add_evaluation(db_session, station_id, daily_model, recent, flagged=i < 5)
+    # 25 real bad days, 5 flagged.
+    for i, sid in enumerate(stations):
+        _add_evaluation(db_session, sid, daily_model, night(2), flagged=i < 5)
     db_session.commit()
     message = tasks.daily_verdict_drift(db_session, now)
-    assert message is not None and "20% of the 25" in message
+    assert message is not None and "20% of the 25" in message and "COUNTING FAULT" not in message
 
     # Most bad days flagged: no alarm.
-    for _ in range(40):
-        _add_evaluation(db_session, station_id, daily_model, recent, flagged=True)
+    for sid in stations:
+        for k in (3, 4):
+            _add_evaluation(db_session, sid, daily_model, night(k), flagged=True)
     db_session.commit()
     assert tasks.daily_verdict_drift(db_session, now) is None
+
+    # A retry stored one night again: the rows are wrong, and the message says so first.
+    _add_evaluation(db_session, stations[0], daily_model, night(2) + timedelta(minutes=10), flagged=False)
+    db_session.commit()
+    message = tasks.daily_verdict_drift(db_session, now)
+    assert message.startswith("Daily verdict check: COUNTING FAULT") and "1 rows repeat" in message
