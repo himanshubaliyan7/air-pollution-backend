@@ -533,6 +533,15 @@ def evaluate_recent_forecasts(evaluation_window_days: int = 1) -> int:
         # ended inside the window, i.e. began a day earlier.
         day = timedelta(days=1) if target is ForecastTarget.DAILY_MEAN else timedelta(0)
 
+        # A retry (or a manual rerun) replaces the rows of the attempt before it:
+        # the drift check sums a week of rows, and a failed attempt has already
+        # committed its own, so every failure would count its days twice.
+        session.execute(
+            delete(ExceedanceEvaluation).where(
+                ExceedanceEvaluation.computed_at > now - timedelta(days=evaluation_window_days) / 2
+            ).execution_options(synchronize_session=False)
+        )
+
         written = 0
         for station in stations:
             thresholds = thresholds_for_station(station, thresholds_cache)

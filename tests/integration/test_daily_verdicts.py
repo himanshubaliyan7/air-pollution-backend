@@ -238,6 +238,29 @@ def test_evaluation_scores_only_the_verdict_shown_the_evening_before(db_session,
     assert (row.n_exceedance_days_actual, row.recall, row.mae) == (1, 1.0, pytest.approx(10.0))
 
 
+def test_a_retry_replaces_the_rows_of_the_failed_attempt(db_session, monkeypatch, daily_target):
+    station_id = add_station(db_session, "eval-retry")
+    day_start = MIDNIGHT_18TH
+    for h in range(24):
+        add_reading(db_session, station_id, day_start + timedelta(minutes=30, hours=h), value=120.0)
+    model_id = add_model_run(db_session, station_id)
+    db_session.add(Forecast(
+        station_id=station_id, pollutant=Pollutant.PM25, model_id=model_id, forecast_made_at=day_start - timedelta(hours=2),
+        target_time=day_start, horizon_hours=24, point_forecast=110.0, quantile_low=100.0, quantile_high=120.0,
+        exceedance_probability=0.9, exceedance_flag=True, target=DAILY,
+    ))
+    yesterday = day_start  # the night before's run: kept
+    _add_evaluation(db_session, station_id, model_id, yesterday, flagged=False)
+    db_session.commit()
+    first = day_start + timedelta(days=1)
+    for attempt in (first, first + timedelta(minutes=10)):  # the failed attempt, then its retry
+        monkeypatch.setattr(tasks, "datetime", fixed_datetime(attempt))
+        assert tasks.evaluate_recent_forecasts() == 1
+    db_session.expire_all()
+    times = sorted(r.computed_at for r in db_session.query(ExceedanceEvaluation).filter_by(horizon_hours=24))
+    assert times == [yesterday, first + timedelta(minutes=10)]
+
+
 def test_digest_legend_explains_the_verdicts_of_the_family_being_served(daily_target, monkeypatch):
     from alerting.digest import _legend
 
