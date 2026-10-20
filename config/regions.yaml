@@ -32,3 +32,13 @@ regions:
     bbox: [72.70, 18.80, 73.35, 19.55]
     aqi_standard: CPCB National AQI
     thresholds_config: thresholds_cpcb.yaml
+    # Mumbai: winter window 2025-12-01 to 2026-02-15, 29 stations, the rule at p >= 0.4
+    # (scripts/daily_verdict_backtest.py, 2026-10-20). 97% of those days were Go, so the
+    # exact share is high; the few No-go days (about 2%) usually came on a sharp rise
+    # the last-24h mean had not seen. The monsoon fold (2026-06-01 to 09-15) was all Go.
+    backtest:
+      period: 2025-12-01 to 2026-02-15
+      exact_grade_tomorrow: 0.92
+      exact_grade_day_5: 0.82
+      no_go_called_go_low: 0.47
+      no_go_called_go_high: 0.58

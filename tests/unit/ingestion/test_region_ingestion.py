@@ -30,13 +30,16 @@ def test_unknown_region_names_the_known_ones():
         region_search_area("atlantis")
 
 
-def test_backtest_block_is_delhis_and_mumbai_has_none():
+def test_each_region_carries_its_own_backtest_block():
     delhi, mumbai = get_region("delhi-ncr"), get_region("mumbai")
-    assert delhi.backtest is not None and mumbai.backtest is None
     assert (delhi.backtest.period, delhi.backtest.exact_grade_tomorrow, delhi.backtest.exact_grade_day_5) == (
         "2025-10-15 to 2025-11-30", 0.61, 0.52,
     )
     assert (delhi.backtest.no_go_called_go_low, delhi.backtest.no_go_called_go_high) == (0.02, 0.05)
+    assert (mumbai.backtest.period, mumbai.backtest.exact_grade_tomorrow, mumbai.backtest.exact_grade_day_5) == (
+        "2025-12-01 to 2026-02-15", 0.92, 0.82,
+    )
+    assert (mumbai.backtest.no_go_called_go_low, mumbai.backtest.no_go_called_go_high) == (0.47, 0.58)
     assert len(load_regions()) == 2
 
 

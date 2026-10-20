@@ -199,7 +199,7 @@ def test_select_stations_filters_by_region_and_station_id(db_session):
         backfill_archive.select_stations(stations, "atlantis")
 
 
-def test_regions_api_serves_delhis_backtest_and_null_for_mumbai(db_session):
+def test_regions_api_serves_each_regions_backtest(db_session):
     from api.main import app
 
     regions = {r["id"]: r for r in TestClient(app).get("/api/v1/regions").json()}
@@ -207,8 +207,12 @@ def test_regions_api_serves_delhis_backtest_and_null_for_mumbai(db_session):
         "period": "2025-10-15 to 2025-11-30", "exact_grade_tomorrow": 0.61, "exact_grade_day_5": 0.52,
         "no_go_called_go_low": 0.02, "no_go_called_go_high": 0.05,
     }
-    assert regions["mumbai"]["backtest"] is None
-    assert TestClient(app).get("/api/v1/regions/mumbai").json()["backtest"] is None
+    mumbai = {
+        "period": "2025-12-01 to 2026-02-15", "exact_grade_tomorrow": 0.92, "exact_grade_day_5": 0.82,
+        "no_go_called_go_low": 0.47, "no_go_called_go_high": 0.58,
+    }
+    assert regions["mumbai"]["backtest"] == mumbai
+    assert TestClient(app).get("/api/v1/regions/mumbai").json()["backtest"] == mumbai
 
 
 def test_scripts_do_not_import_each_other():
